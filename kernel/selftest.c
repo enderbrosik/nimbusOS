@@ -8,6 +8,7 @@
 #include "kernel/string.h"
 #include "kernel/panic.h"
 #include "drivers/pit.h"
+#include "fs/vfs.h"
 
 static u32 rng = 12345;
 static u32 rnd(void) { rng = rng * 1103515245 + 12345; return rng >> 8; }
@@ -108,4 +109,41 @@ void selftest_core(void)
     test_vmm();
     test_heap();
     test_tasks();
+}
+
+static void fs_report(const char *m) { kprintf("[fsck] %s\n", m); }
+
+void selftest_fs(void)
+{
+    nbfs_t *fs = ROOTFS;
+    /* list the root directory */
+    u32 cookie = 0;
+    struct nbfs_entry e;
+    kprintf("[test] fs: / contains:");
+    while (nbfs_readdir(fs, NBFS_ROOT_INO, &cookie, &e) == 1)
+        kprintf(" %s%s", e.name, e.type == NBFS_TYPE_DIR ? "/" : "");
+    kprintf("\n");
+    char *txt;
+    u32 len;
+    ASSERT(vfs_read_all("/readme.txt", &txt, &len) == 0 && len > 10);
+    kfree(txt);
+
+    /* create / write / read / rename / delete on the real disk */
+    u32 free_before = fs->sb.free_blocks;
+    ASSERT(nbfs_mkdir(fs, "/selftest") == 0);
+    ASSERT(nbfs_mkdir(fs, "/selftest/nested") == 0);
+    static char big[20000];
+    for (u32 i = 0; i < sizeof big; i++) big[i] = (char)('a' + i % 26);
+    ASSERT(vfs_write_all("/selftest/nested/data.txt", big, sizeof big) == 0);
+    static char back[20000];
+    ASSERT(nbfs_read_file(fs, "/selftest/nested/data.txt", back, sizeof back) == (int)sizeof back);
+    ASSERT(!memcmp(big, back, sizeof big));
+    ASSERT(nbfs_rename(fs, "/selftest/nested/data.txt", "/selftest/moved.txt") == 0);
+    struct nbfs_stat st;
+    ASSERT(nbfs_stat(fs, "/selftest/moved.txt", &st) == 0 && st.size == sizeof big && st.mtime > 1600000000);
+    ASSERT(nbfs_remove_tree(fs, "/selftest") == 0);
+    ASSERT(fs->sb.free_blocks == free_before);
+    int problems = nbfs_check(fs, fs_report);
+    ASSERT(problems == 0);
+    kprintf("[test] fs: create/write/read/rename/delete ok, fsck clean\n");
 }

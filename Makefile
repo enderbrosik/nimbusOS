@@ -51,7 +51,7 @@ MKIMAGE := $(BUILD)/tools/mkimage
 QEMU_COMMON := -m 256M -vga std -drive file=$(IMG),format=raw,index=0,media=disk
 QEMU_EXTRA  ?=
 
-.PHONY: all build run debug clean test
+.PHONY: all build run debug clean test fsimage
 all: build
 build: $(IMG)
 
@@ -73,12 +73,43 @@ $(KELF): $(KOBJS) arch/x86/linker.ld
 $(KBIN): $(KOBJS) arch/x86/linker.ld
 	$(KLD) $(LDFLAGS) --oformat binary -o $@ $(KOBJS)
 
-$(BUILD)/tools/%: tools/%.c
+$(BUILD)/tools/mkimage: tools/mkimage.c
 	@mkdir -p $(dir $@)
-	$(HOSTCC) $(HOSTCFLAGS) $^ -o $@
+	$(HOSTCC) $(HOSTCFLAGS) $< -o $@
 
-$(IMG): $(MBR) $(STAGE2) $(KBIN) $(KELF) $(MKIMAGE)
+# Host tools that link the shared file system code.
+$(BUILD)/tools/%: tools/%.c fs/nbfs.c fs/nbfs.h tools/hostdev.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) $< fs/nbfs.c -o $@
+
+# A standalone, empty 16 MiB NimbusFS image (demonstrates the formatter).
+fsimage: $(NFSTOOL)
+	$(NFSTOOL) mkfs $(BUILD)/empty-fs.img 16 EMPTY
+
+test: $(BUILD)/tools/fstest
+	@mkdir -p $(BUILD)/test
+	$(BUILD)/tools/fstest
+
+NFSTOOL := $(BUILD)/tools/nfstool
+MKWALL  := $(BUILD)/tools/mkwallpaper
+GENROOT := $(BUILD)/genroot
+ROOTFS_FILES := $(shell find rootfs -type f 2>/dev/null)
+
+$(MKWALL): tools/mkwallpaper.c
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) $< -o $@ -lm
+
+$(GENROOT)/.stamp: $(MKWALL)
+	$(MKWALL) $(GENROOT)
+	@touch $@
+
+# The disk image: boot code + kernel, then a NimbusFS partition populated
+# from rootfs/ (hand-written files) and $(GENROOT) (generated pictures).
+$(IMG): $(MBR) $(STAGE2) $(KBIN) $(KELF) $(MKIMAGE) $(NFSTOOL) $(GENROOT)/.stamp $(ROOTFS_FILES)
 	$(MKIMAGE) $@ $(IMG_MB) $(MBR) $(STAGE2) $(KBIN)
+	$(NFSTOOL) format $@ NIMBUS
+	$(NFSTOOL) import $@ rootfs /
+	$(NFSTOOL) import $@ $(GENROOT) /
 
 run: $(IMG)
 	$(QEMU) $(QEMU_COMMON) -serial stdio $(QEMU_EXTRA)

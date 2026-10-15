@@ -1,0 +1,7 @@
+Shopping list
+- milk
+- bread
+- coffee beans
+
+Ideas
+- write a game for NimbusOS

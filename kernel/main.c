@@ -23,6 +23,7 @@
 #include "drivers/fb.h"
 #include "drivers/ata.h"
 #include "gui/gfx.h"
+#include "fs/vfs.h"
 
 struct bootinfo g_bootinfo;
 
@@ -69,6 +70,10 @@ void kmain(struct bootinfo *bi)
     mouse_init();
     ata_init();
     pci_enumerate();
+
+    /* ---- Stage 4: file system ---- */
+    if (!vfs_init()) panic("cannot mount the system volume");
+    selftest_fs();
     gfx_init();
     if (!fb_init(1024, 768)) panic("no linear framebuffer (run QEMU with -vga std)");
     mouse_set_bounds(g_fb.width, g_fb.height);

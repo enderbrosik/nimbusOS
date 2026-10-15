@@ -1,0 +1,13 @@
+Welcome to NimbusOS
+===================
+
+Tips:
+ * Double-click an icon on the desktop to open it.
+ * Drag icons to rearrange them; positions are remembered.
+ * Right-click the desktop for New Folder, New Text File,
+   Change Wallpaper, Refresh and Properties.
+ * Alt+Tab cycles between windows, the Win key opens Start.
+ * Drag window edges or corners to resize, double-click a
+   title bar to maximize.
+
+Have fun!

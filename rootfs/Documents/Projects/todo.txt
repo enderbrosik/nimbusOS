@@ -1,0 +1,6 @@
+TODO
+[x] bootloader
+[x] kernel
+[x] drivers
+[x] file system
+[x] desktop
