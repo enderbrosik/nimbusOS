@@ -14,6 +14,7 @@
  *   nfstool import <image> <host-dir> <path>       copy a host directory tree in
  *   nfstool check  <image>                         consistency check
  *   nfstool df     <image>
+ *   nfstool blank  <new.img> <size-MiB>           create a blank (all-zero, sparse) disk image
  *
  * An image with an MBR whose first partition is type 0x4E is accessed
  * through that partition (that is how build/nimbus.img is laid out).
@@ -131,7 +132,7 @@ static void report(const char *msg) { fprintf(stderr, "  problem: %s\n", msg); }
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: nfstool <mkfs|format|ls|tree|cat|put|get|mkdir|rm|mv|import|check|df> <image> ...\n");
+        fprintf(stderr, "usage: nfstool <mkfs|format|blank|ls|tree|cat|put|get|mkdir|rm|mv|import|check|df> <image> ...\n");
         return 1;
     }
     const char *cmd = argv[1], *img = argv[2];
@@ -152,6 +153,17 @@ int main(int argc, char **argv)
         int r = nbfs_format(&dev, argc > 4 ? argv[4] : "NIMBUS", host_now());
         if (r) die("format", r);
         printf("nfstool: created empty NimbusFS image %s (%ld MiB)\n", img, mib);
+        return 0;
+    }
+    if (!strcmp(cmd, "blank")) {
+        if (argc < 4) { fprintf(stderr, "usage: nfstool blank <new.img> <size-MiB>\n"); return 1; }
+        struct stat st;
+        if (stat(img, &st) == 0) { fprintf(stderr, "nfstool: %s already exists; delete it first\n", img); return 1; }
+        int fd = open(img, O_RDWR | O_CREAT | O_EXCL, 0644);
+        long mib = atol(argv[3]);
+        if (fd < 0 || mib < 1 || ftruncate(fd, (off_t)mib * 1024 * 1024) != 0) { perror(img); return 1; }
+        close(fd);
+        printf("nfstool: created blank %ld MiB disk image %s\n", mib, img);
         return 0;
     }
     if (!strcmp(cmd, "format")) {

@@ -51,7 +51,7 @@ MKIMAGE := $(BUILD)/tools/mkimage
 QEMU_COMMON := -m 256M -vga std -drive file=$(IMG),format=raw,index=0,media=disk
 QEMU_EXTRA  ?=
 
-.PHONY: all build run debug clean test fsimage
+.PHONY: all build run debug clean test fsimage installer-test run-target test-all
 all: build
 build: $(IMG)
 
@@ -118,6 +118,35 @@ debug: $(IMG)
 	@echo "QEMU paused with GDB stub on localhost:1234. In another terminal run:"
 	@echo "  gdb $(KELF) -ex 'target remote :1234' -ex 'break kmain' -ex continue"
 	$(QEMU) $(QEMU_COMMON) -serial stdio -s -S $(QEMU_EXTRA)
+
+# ---- installer testing ---------------------------------------------------
+# A blank 64 MiB target disk image is created by `nfstool blank` (a sparse
+# regular file - no real devices are involved), attached as the second
+# drive (Primary Slave), and the live image boots from the first.
+TARGET_IMG ?= $(BUILD)/target.img
+
+$(TARGET_IMG): | $(NFSTOOL)
+	$(NFSTOOL) blank $@ 64
+
+installer-test: $(IMG) $(TARGET_IMG)
+	@echo "Live image: $(IMG) (Primary Master), blank target: $(TARGET_IMG) (Primary Slave)"
+	$(QEMU) -m 256M -vga std -drive file=$(IMG),format=raw,index=0,media=disk \
+	        -drive file=$(TARGET_IMG),format=raw,index=1,media=disk -serial stdio $(QEMU_EXTRA)
+
+# Boot only the installed target disk.
+run-target:
+	@test -f $(TARGET_IMG) || (echo "no $(TARGET_IMG) - run make installer-test first" && false)
+	$(QEMU) -m 256M -vga std -drive file=$(TARGET_IMG),format=raw,index=0,media=disk -serial stdio $(QEMU_EXTRA)
+
+# Run every automated test (host FS suite + all QEMU stage tests).
+test-all: test $(IMG)
+	python3 tools/test_stage1.py
+	python3 tools/test_stage2.py
+	python3 tools/test_stage3.py
+	python3 tools/test_stage4.py
+	python3 tools/test_stage5.py
+	python3 tools/test_stage6.py
+	python3 tools/test_stage7.py
 
 clean:
 	rm -rf $(BUILD)

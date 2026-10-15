@@ -24,19 +24,19 @@ with Qemu([IMG], name="stage5") as q:
 
     # 1. double-click the Notepad icon (column 0, row 1) -> window opens
     q.double_click(*icon_center(0, 1))
-    q.wait_serial(r'window 1 created: "Notepad"', 5)
+    q.wait_serial(r'window 1 created: "Untitled - Notepad" 620x420', 5)
 
-    # 2. drag the window by its title bar
-    q.drag(200, 62, 500, 300)
-    q.wait_serial(r"window 1 moved to 380,288", 5)
+    # 2. drag the window by its title bar (frame 622x448 at 80,50)
+    q.drag(200, 62, 300, 150)
+    q.wait_serial(r"window 1 moved to 180,138 622x448", 5)
 
-    # 3. resize from the bottom-right corner (frame 422x228 at 380,288)
-    q.drag(380 + 421, 288 + 227, 380 + 521, 288 + 297)
-    q.wait_serial(r"window 1 resized to 380,288 522x298", 5)
+    # 3. resize from the bottom-right corner
+    q.drag(180 + 621, 138 + 447, 180 + 721, 138 + 517)
+    q.wait_serial(r"window 1 resized to 180,138 722x518", 5)
     q.screenshot(f"{shots}/stage5-2-window.png")
 
     # 4. minimize via the title bar button, restore via the taskbar
-    fx, fy, fw = 380, 288, 522
+    fx, fy, fw = 180, 138, 722
     q.click(fx + fw - 1 - 2 - 30 - 2 * 32 + 15, fy + 12)       # minimize button
     q.wait_serial(r"window 1 minimized", 5)
     q.click(150, 768 - 18)                                     # taskbar button
@@ -44,11 +44,12 @@ with Qemu([IMG], name="stage5") as q:
     q.wait_serial(r"window 1 restored", 5)
 
     # 5. right-click on the desktop -> context menu
-    q.right_click(700, 150)
+    q.right_click(700, 690)                     # below the window
     q.wait_serial(r"context menu opened", 5)
     q.screenshot(f"{shots}/stage5-3-context-menu.png")
-    # choose "New Folder", then name it in the rename box
-    q.click(750, 150 + 3 + 13)
+    # the 154 px menu is pushed up to stay above the taskbar
+    menu_y = min(690, 768 - 36 - 154)
+    q.click(750, menu_y + 3 + 13)               # "New Folder", then name it
     q.wait_serial(r"created /Desktop/New Folder", 5)
     time.sleep(0.3)
     q.type("Projects")
@@ -68,9 +69,9 @@ with Qemu([IMG], name="stage5") as q:
 
     # 8. open a second window and Alt+Tab between them
     q.double_click(*icon_center(0, 2))   # Paint
-    q.wait_serial(r'window \d+ created: "Paint"', 5)
+    q.wait_serial(r'window \d+ created: "Untitled - Paint"', 5)
     q.key("alt-tab")
-    q.wait_serial(r'alt-tab -> "Notepad"', 5)
+    q.wait_serial(r'alt-tab -> "Untitled - Notepad"', 5)
     time.sleep(0.5)
     q.screenshot(f"{shots}/stage5-5-final.png")
     log = q.serial()
