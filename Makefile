@@ -32,7 +32,7 @@ QEMU    ?= qemu-system-i386
 CFLAGS  := $(TARGET_FLAG) -std=gnu11 -ffreestanding -fno-builtin -nostdlib -nostdinc \
            -fno-stack-protector -fno-pic -fno-omit-frame-pointer -fno-strict-aliasing \
            -mno-sse -mno-sse2 -mno-mmx -mno-80387 -m32 -march=i686 \
-           -O2 -g -Wall -Wextra -Wno-unused-parameter -I. -DNIMBUS_KERNEL
+           -O2 -g -Wall -Wextra -Wno-unused-parameter -I. -DNIMBUS_KERNEL $(EXTRA_CFLAGS)
 LDFLAGS := -m elf_i386 -T arch/x86/linker.ld -nostdlib
 HOSTCFLAGS := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -I.
 
