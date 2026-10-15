@@ -15,6 +15,14 @@
 #include "kernel/heap.h"
 #include "kernel/task.h"
 #include "kernel/selftest.h"
+#include "kernel/drvdemo.h"
+#include "drivers/ps2.h"
+#include "drivers/keyboard.h"
+#include "drivers/mouse.h"
+#include "drivers/pci.h"
+#include "drivers/fb.h"
+#include "drivers/ata.h"
+#include "gui/gfx.h"
 
 struct bootinfo g_bootinfo;
 
@@ -54,5 +62,16 @@ void kmain(struct bootinfo *bi)
     kprintf("PANIC_TEST: dereferencing a bad pointer...\n");
     *(volatile u32 *)0xBADBAD00 = 1;
 #endif
-    for (;;) hlt();
+
+    /* ---- Stage 3: drivers ---- */
+    ps2_controller_init();
+    keyboard_init();
+    mouse_init();
+    ata_init();
+    pci_enumerate();
+    gfx_init();
+    if (!fb_init(1024, 768)) panic("no linear framebuffer (run QEMU with -vga std)");
+    mouse_set_bounds(g_fb.width, g_fb.height);
+    kprintf("Drivers OK.\n");
+    drvdemo_run();
 }

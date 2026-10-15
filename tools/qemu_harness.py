@@ -124,7 +124,10 @@ class Qemu:
     def mouse_home(self):
         for _ in range(8):
             self.cmd("mouse_move -200 -200")
-        time.sleep(0.15)
+            time.sleep(0.03)
+        # QEMU's PS/2 model drains accumulated motion at the guest's packet
+        # rate, so give it time to fully arrive before moving elsewhere.
+        time.sleep(0.5)
         self.mx = self.my = 0
 
     def mouse_to(self, x, y):
@@ -135,9 +138,10 @@ class Qemu:
             sx = max(-100, min(100, dx))
             sy = max(-100, min(100, dy))
             self.cmd("mouse_move %d %d" % (sx, sy))
+            time.sleep(0.03)
             dx -= sx; dy -= sy
         self.mx, self.my = x, y
-        time.sleep(0.08)
+        time.sleep(0.1)
 
     def button(self, state):
         self.cmd("mouse_button %d" % state)

@@ -90,12 +90,12 @@ static void test_tasks(void)
     task_create("demo-B", task_b, NULL);
     task_create("spinner", task_spin, NULL);
     u64 start = timer_ticks();
-    while (timer_ticks() - start < 1000) { /* busy: the kernel task does not yield either */ }
+    while (timer_ticks() - start < 300) { /* busy: the kernel task does not yield either */ }
     stop_tasks = true;
-    task_sleep(200);
-    kprintf("[test] tasks: A ran %u times, B ran %u times, spinner %u loops in 1s\n",
+    task_sleep(160);
+    kprintf("[test] tasks: A ran %u times, B ran %u times, spinner %u loops in 0.3s\n",
             counter_a, counter_b, spin_count);
-    ASSERT(counter_a >= 5 && counter_b >= 4 && spin_count > 1000);
+    ASSERT(counter_a >= 2 && counter_b >= 2 && spin_count > 1000);
     struct task_info ti[16];
     int n = task_list(ti, 16);
     for (int i = 0; i < n; i++) klog("[task] #%d %-10s state %d cpu %u%%\n", ti[i].id, ti[i].name, ti[i].state, ti[i].cpu_percent);
