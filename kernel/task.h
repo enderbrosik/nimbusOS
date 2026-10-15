@@ -22,6 +22,9 @@ struct task {
 
 void tasking_init(void);
 struct task *task_create(const char *name, void (*entry)(void *), void *arg);
+struct task *task_create_ex(const char *name, void (*entry)(void *), void *arg, u32 stack_size);
+struct sysmon_stats { u32 heap_used, heap_mapped, free_frames, samples; };
+extern struct sysmon_stats g_sysmon;
 void task_yield(void);
 void task_sleep(u32 ms);
 NORETURN void task_exit(void);

@@ -108,17 +108,22 @@ void tasking_init(void)
 
 struct task *task_create(const char *name, void (*entry)(void *), void *arg)
 {
+    return task_create_ex(name, entry, arg, STACK_SIZE);
+}
+
+struct task *task_create_ex(const char *name, void (*entry)(void *), void *arg, u32 stack_size)
+{
     struct task *t = kzalloc(sizeof *t);
     if (!t) return NULL;
-    t->stack = kmalloc(STACK_SIZE);
+    t->stack = kmalloc(stack_size);
     if (!t->stack) { kfree(t); return NULL; }
-    t->stack_size = STACK_SIZE;
+    t->stack_size = stack_size;
     strlcpy(t->name, name, sizeof t->name);
     t->entry = entry;
     t->arg = arg;
     t->state = TASK_READY;
 
-    struct regs *r = (struct regs *)((u8 *)t->stack + STACK_SIZE - sizeof(struct regs));
+    struct regs *r = (struct regs *)((u8 *)t->stack + stack_size - sizeof(struct regs));
     memset(r, 0, sizeof *r);
     r->gs = r->fs = r->es = r->ds = 0x10;
     r->eip = (u32)task_trampoline;

@@ -30,6 +30,13 @@ bool vfs_exists(const char *path);
 bool vfs_is_dir(const char *path);
 /* creates "base", or "base (2)", "base (3)"... in dir; writes the path chosen */
 int  vfs_create_unique(const char *dir, const char *base, const char *ext, int type, char *out, int max);
+struct vfs_item {
+    char name[NBFS_NAME_MAX + 1];
+    u32 type, size, mtime, ctime;
+};
+/* Lists a directory, folders first then files, alphabetically (case
+ * insensitive).  *out is kmalloc'ed; returns count or a negative error. */
+int  vfs_list(const char *path, struct vfs_item **out);
 void vfs_format_size(u32 bytes, char *out, int max);
 void vfs_format_time(u32 t, char *out, int max);
 #endif

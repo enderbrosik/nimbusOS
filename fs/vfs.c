@@ -175,3 +175,45 @@ void vfs_format_time(u32 t, char *out, int max)
     unix_to_rtc(t, &tm);
     snprintf(out, max, "%04d-%02d-%02d %02d:%02d", tm.year, tm.month, tm.day, tm.hour, tm.minute);
 }
+
+static bool item_before(struct vfs_item *a, struct vfs_item *b)
+{
+    if (a->type != b->type) return a->type == NBFS_TYPE_DIR;
+    return strcasecmp(a->name, b->name) < 0;
+}
+
+int vfs_list(const char *path, struct vfs_item **out)
+{
+    struct nbfs_stat st;
+    int r = nbfs_stat(ROOTFS, path, &st);
+    if (r) return r;
+    if (st.type != NBFS_TYPE_DIR) return NBFS_ENOTDIR;
+    int cap = 16, n = 0;
+    struct vfs_item *items = kmalloc(cap * sizeof *items);
+    u32 cookie = 0;
+    struct nbfs_entry e;
+    while ((r = nbfs_readdir(ROOTFS, st.inode, &cookie, &e)) == 1) {
+        if (n == cap) {
+            cap *= 2;
+            items = krealloc(items, cap * sizeof *items);
+        }
+        struct nbfs_stat cs;
+        memset(&items[n], 0, sizeof items[n]);
+        strlcpy(items[n].name, e.name, sizeof items[n].name);
+        items[n].type = e.type;
+        if (nbfs_stat_inode(ROOTFS, e.inode, &cs) == 0) {
+            items[n].size = cs.size;
+            items[n].mtime = cs.mtime;
+            items[n].ctime = cs.ctime;
+        }
+        n++;
+    }
+    for (int i = 1; i < n; i++) {           /* insertion sort */
+        struct vfs_item t = items[i];
+        int j = i - 1;
+        while (j >= 0 && item_before(&t, &items[j])) { items[j + 1] = items[j]; j--; }
+        items[j + 1] = t;
+    }
+    *out = items;
+    return r < 0 ? r : n;
+}

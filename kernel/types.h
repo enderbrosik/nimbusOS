@@ -39,6 +39,7 @@ typedef __builtin_va_list va_list;
 #define NORETURN    __attribute__((noreturn))
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
+#define ABS(x) ((x) < 0 ? -(x) : (x))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define ALIGN_UP(x, a) (((x) + ((a) - 1)) & ~((a) - 1))
 
