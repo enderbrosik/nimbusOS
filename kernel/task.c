@@ -18,6 +18,7 @@
 #include "kernel/panic.h"
 #include "arch/x86/idt.h"
 #include "arch/x86/io.h"
+#include "arch/x86/gdt.h"
 #include "drivers/pit.h"
 
 #define QUANTUM 10
@@ -50,14 +51,14 @@ static void update_cpu_stats(void)
     window_start = now;
 }
 
-static u32 schedule(u32 esp, int voluntary)
+static uptr schedule(uptr sp, int voluntary)
 {
-    current->esp = esp;
+    current->sp = sp;
     if (!voluntary) {
         current->cpu_ticks++;
         current->cpu_ticks_window++;
         update_cpu_stats();
-        if (++slice < QUANTUM && current->state == TASK_READY) return esp;
+        if (++slice < QUANTUM && current->state == TASK_READY) return sp;
     }
     slice = 0;
     u64 now = timer_ticks();
@@ -65,11 +66,11 @@ static u32 schedule(u32 esp, int voluntary)
     do {
         t = t->next;
         if (t->state == TASK_SLEEPING && now >= t->wake_tick) t->state = TASK_READY;
-        if (t->state == TASK_READY && t != idle_task) { current = t; return t->esp; }
+        if (t->state == TASK_READY && t != idle_task) { current = t; return t->sp; }
     } while (t != current);
-    if (current->state == TASK_READY && current != idle_task) return current->esp;
+    if (current->state == TASK_READY && current != idle_task) return current->sp;
     current = idle_task;
-    return idle_task->esp;
+    return idle_task->sp;
 }
 
 /* Idle task: halts the CPU and reaps dead tasks. */
@@ -123,13 +124,18 @@ struct task *task_create_ex(const char *name, void (*entry)(void *), void *arg, 
     t->arg = arg;
     t->state = TASK_READY;
 
-    struct regs *r = (struct regs *)((u8 *)t->stack + stack_size - sizeof(struct regs));
+    /* The initial frame is popped by isr_common's epilogue; iretq then
+     * loads RSP from it.  RSP is chosen so that the trampoline starts with
+     * the stack alignment of a normal function entry (RSP % 16 == 8). */
+    uptr top = ((uptr)t->stack + stack_size) & ~(uptr)15;
+    struct regs *r = (struct regs *)(top - sizeof(struct regs));
     memset(r, 0, sizeof *r);
-    r->gs = r->fs = r->es = r->ds = 0x10;
-    r->eip = (u32)task_trampoline;
-    r->cs = 0x08;
-    r->eflags = 0x202;          /* IF set */
-    t->esp = (u32)r;
+    r->rip = (uptr)task_trampoline;
+    r->cs = KERNEL_CS;
+    r->rflags = 0x202;          /* IF set */
+    r->rsp = top - 8;
+    r->ss = KERNEL_DS;
+    t->sp = (uptr)r;
 
     u32 f = irq_save();
     t->id = next_id++;

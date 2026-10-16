@@ -7,33 +7,34 @@
 #   make test     - run the host-side file system test suite
 #   make clean    - remove build output
 #
-# Toolchain: uses i686-elf-gcc if it is on PATH, otherwise clang targeting
-# i686-elf with ld.lld.  Override with e.g. `make KCC=... KLD=...`.
+# Toolchain: uses x86_64-elf-gcc if it is on PATH, otherwise clang targeting
+# x86_64-elf with ld.lld.  Override with e.g. `make KCC=... KLD=...`.
+# The kernel is 64-bit (long mode); the boot sectors are 16/32-bit.
 # =============================================================================
 
 BUILD   := build
 IMG     := $(BUILD)/nimbus.img
 IMG_MB  ?= 64
 
-TOOLCHAIN ?= $(if $(shell command -v i686-elf-gcc 2>/dev/null),gcc,clang)
+TOOLCHAIN ?= $(if $(shell command -v x86_64-elf-gcc 2>/dev/null),gcc,clang)
 ifeq ($(TOOLCHAIN),gcc)
-  KCC     ?= i686-elf-gcc
-  KLD     ?= i686-elf-ld
+  KCC     ?= x86_64-elf-gcc
+  KLD     ?= x86_64-elf-ld
   TARGET_FLAG :=
 else
   KCC     ?= clang
   KLD     ?= $(if $(shell command -v ld.lld 2>/dev/null),ld.lld,ld)
-  TARGET_FLAG := --target=i686-elf
+  TARGET_FLAG := --target=x86_64-elf
 endif
 NASM    ?= nasm
 HOSTCC  ?= cc
-QEMU    ?= qemu-system-i386
+QEMU    ?= qemu-system-x86_64
 
 CFLAGS  := $(TARGET_FLAG) -std=gnu11 -ffreestanding -fno-builtin -nostdlib -nostdinc \
            -fno-stack-protector -fno-pic -fno-omit-frame-pointer -fno-strict-aliasing \
-           -mno-sse -mno-sse2 -mno-mmx -mno-80387 -m32 -march=i686 \
+           -mno-sse -mno-sse2 -mno-mmx -mno-80387 -m64 -mno-red-zone -mcmodel=small \
            -O2 -g -Wall -Wextra -Wno-unused-parameter -I. -DNIMBUS_KERNEL $(EXTRA_CFLAGS)
-LDFLAGS := -m elf_i386 -T arch/x86/linker.ld -nostdlib
+LDFLAGS := -m elf_x86_64 -z max-page-size=4096 -T arch/x86/linker.ld -nostdlib
 HOSTCFLAGS := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -I.
 
 KDIRS   := kernel arch/x86 drivers fs gui apps installer net
@@ -65,7 +66,7 @@ $(BUILD)/%.o: %.c
 
 $(BUILD)/arch/x86/%.o: arch/x86/%.asm
 	@mkdir -p $(dir $@)
-	$(NASM) -f elf32 $< -o $@
+	$(NASM) -f elf64 $< -o $@
 
 $(BUILD)/boot/%.bin: arch/x86/boot/%.asm
 	@mkdir -p $(dir $@)

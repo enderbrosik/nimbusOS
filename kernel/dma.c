@@ -22,7 +22,7 @@ void *dma_alloc_page(u32 *phys)
     next_virt += PAGE_SIZE;
     irq_restore(f);
     if (!vmm_map(v, p, PTE_WRITE | PTE_PCD | PTE_PWT)) return NULL;
-    memset((void *)v, 0, PAGE_SIZE);
+    memset((void *)(uptr)v, 0, PAGE_SIZE);
     *phys = p;
-    return (void *)v;
+    return (void *)(uptr)v;
 }

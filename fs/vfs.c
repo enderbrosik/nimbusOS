@@ -138,7 +138,7 @@ const char *boot_disk_name(void)
 
 static bool mount_ramdisk(void)
 {
-    ramdisk = (u8 *)g_bootinfo.ramdisk_addr;
+    ramdisk = (u8 *)(uptr)g_bootinfo.ramdisk_addr;
     ramdisk_sectors = g_bootinfo.ramdisk_sectors;
     vmm_identity_map(g_bootinfo.ramdisk_addr, ramdisk_sectors * 512);
     u8 *pe = ramdisk + 0x1BE;

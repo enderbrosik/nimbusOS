@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage 1 test: MBR + stage 2 load the kernel, protected mode, GDT/IDT/PIC,
+"""Stage 1 test: MBR + stage 2 load the kernel, protected mode -> 64-bit long mode, GDT/IDT/PIC,
 exception handling and serial logging all work (checked on the final kernel's
 early boot log; the screenshot shows the VGA text console before the
 desktop takes over)."""
@@ -16,6 +16,6 @@ with Qemu(["build/test/stage1.img"], name="stage1") as q:
     log = q.serial()
     assert "NimbusOS 0.1 - booting" in log
     assert "[boot] drive 80" in log, "boot info from stage 2"
-    for needle in ["GDT loaded", "IDT loaded, PIC remapped", "breakpoint at eip="]:
+    for needle in ["long mode active, GDT + TSS loaded", "IDT loaded, PIC remapped", "breakpoint at rip="]:
         assert needle in log, needle
 print("stage1: PASS")

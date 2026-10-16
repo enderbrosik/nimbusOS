@@ -7,7 +7,7 @@ enum task_state { TASK_READY, TASK_SLEEPING, TASK_BLOCKED, TASK_DEAD };
 struct task {
     int id;
     char name[32];
-    u32 esp;                 /* saved stack pointer (points at struct regs) */
+    uptr sp;                 /* saved stack pointer (points at struct regs) */
     void *stack;             /* base of kmalloc'ed kernel stack (NULL for boot task) */
     u32 stack_size;
     enum task_state state;

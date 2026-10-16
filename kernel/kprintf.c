@@ -49,7 +49,8 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
             while (isdigit(*fmt)) prec = prec * 10 + (*fmt++ - '0');
         }
         while (*fmt == 'l') { lng++; fmt++; }
-        if (*fmt == 'z') fmt++;
+        if (*fmt == 'z') { lng = 2; fmt++; }        /* size_t */
+        if (lng == 1 && sizeof(long) == 8) lng = 2;
         switch (*fmt) {
         case 'd': case 'i': {
             i64 v = lng >= 2 ? va_arg(ap, i64) : (i64)va_arg(ap, int);
@@ -63,7 +64,10 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
         }
         case 'p':
             put(&o, '0'); put(&o, 'x');
-            put_num(&o, (u32)va_arg(ap, void *), 16, false, false, 8, true, false);
+        {
+            u64 v = (uptr)va_arg(ap, void *);
+            put_num(&o, v, 16, false, false, v >> 32 ? 16 : 8, true, false);
+        }
             break;
         case 's': {
             const char *s = va_arg(ap, const char *);

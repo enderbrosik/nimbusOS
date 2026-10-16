@@ -10,7 +10,7 @@ shutil.copy("build/nimbus.img", "build/test/stage2.img")   # never boot the pris
 with Qemu(["build/test/stage2.img"], name="stage2") as q:
     q.wait_serial(r"Core kernel OK", timeout=30)
     log = q.serial()
-    for needle in ["paging enabled", "[test] pmm", "[test] vmm", "[test] heap", "scheduler: preemptive"]:
+    for needle in ["4-level paging", "[test] pmm", "[test] vmm", "[test] heap", "scheduler: preemptive"]:
         assert needle in log, needle
 
 # Panic test: separate build with -DPANIC_TEST writes to an unmapped address.
@@ -20,5 +20,5 @@ with Qemu(["build/panictest/nimbus.img"], name="panic") as q:
     q.wait_serial(r"System halted", timeout=30)
     q.screenshot("build/test/stage2-panic.png")
     log = q.serial()
-    assert "Page Fault" in log and "CR2=badbad00" in log, log[-800:]
+    assert "Page Fault" in log and "CR2=00000000badbad00" in log, log[-800:]
 print("stage2: PASS")

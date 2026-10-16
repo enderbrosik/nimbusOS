@@ -52,7 +52,7 @@ static bool grow(u32 bytes)
     if (last && last->magic == MAGIC_FREE) {
         last->size += need;
     } else {
-        struct block *b = (struct block *)old_end;
+        struct block *b = (struct block *)(uptr)old_end;
         b->magic = MAGIC_FREE;
         b->size = need - sizeof(struct block);
         b->prev = last;

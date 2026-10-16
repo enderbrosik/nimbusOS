@@ -23,7 +23,8 @@ typedef i64 int64_t;
 typedef __SIZE_TYPE__    size_t;
 typedef __PTRDIFF_TYPE__ ptrdiff_t;
 typedef __UINTPTR_TYPE__ uintptr_t;
-typedef int              ssize_t;
+typedef uintptr_t        uptr;      /* integer that can hold a pointer */
+typedef long             ssize_t;
 
 typedef _Bool bool;
 #define true  1

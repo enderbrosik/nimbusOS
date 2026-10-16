@@ -1,6 +1,6 @@
 # NimbusOS
 
-A small hobby operating system for 32-bit x86, written from scratch in C with a
+A small hobby operating system for x86-64 (64-bit long mode), written from scratch in C with a
 little assembly. It boots from its own MBR bootloader into a Windows-style
 desktop with draggable, resizable windows, a taskbar and Start menu, a File
 Explorer, Notepad, Paint, a Terminal, a Task Manager and a graphical installer.
@@ -28,7 +28,7 @@ make test-all     # host suite + every QEMU stage test (headless)
 | Target | What it does |
 |---|---|
 | `make build` | Assembles the bootloader, compiles the kernel, builds the host tools, creates `build/nimbus.img` and populates its NimbusFS partition from `rootfs/` plus generated wallpapers |
-| `make run` | `qemu-system-i386 -m 256M -vga std` on the image, COM1 on stdio |
+| `make run` | `qemu-system-x86_64 -m 256M -vga std` on the image, COM1 on stdio |
 | `make debug` | Same, but QEMU starts paused with a GDB stub on `:1234` (prints the `gdb` command to use; symbols come from `build/kernel.elf`) |
 | `make iso` | Builds the bootable live CD `build/nimbus.iso` |
 | `make run-iso` | Boots the ISO in QEMU as a CD-ROM |
@@ -66,24 +66,24 @@ drive 0x80, so the normal MBR and stage 2 boot from it.
 
 ```sh
 make iso && make run-iso
-# VirtualBox / VMware: create a 32-bit "Other" VM with a 64+ MiB IDE disk,
+# VirtualBox / VMware: create an "Other/Unknown (64-bit)" VM with a 64+ MiB IDE disk,
 # attach nimbus.iso as the CD, use the standard VGA adapter.
 ```
 
 ## Installing the toolchain
 
-You need: a cross compiler for `i686-elf` (GCC **or** Clang + LLD), NASM, a host C
+You need: a cross compiler for `x86_64-elf` (GCC **or** Clang + LLD), NASM, a host C
 compiler, QEMU, GNU make and Python 3 (Pillow is optional: it converts test
 screenshots to PNG and checks Paint's BMP output).
 
-The Makefile auto-detects the compiler: if `i686-elf-gcc` is on `PATH` it uses
-`i686-elf-gcc` + `i686-elf-ld`, otherwise `clang --target=i686-elf` + `ld.lld`.
+The Makefile auto-detects the compiler: if `x86_64-elf-gcc` is on `PATH` it uses
+`x86_64-elf-gcc` + `x86_64-elf-ld`, otherwise `clang --target=x86_64-elf` + `ld.lld`.
 Override with `make TOOLCHAIN=gcc` / `make KCC=... KLD=...`.
 
 **macOS (Homebrew)**
 ```sh
-brew install i686-elf-gcc i686-elf-binutils nasm qemu      # GCC cross toolchain
-# or, instead of i686-elf-gcc:  brew install llvm lld       (Clang path)
+brew install x86_64-elf-gcc x86_64-elf-binutils nasm qemu  # GCC cross toolchain
+# or, instead of x86_64-elf-gcc:  brew install llvm lld     (Clang path)
 python3 -m pip install pillow                               # optional
 ```
 
@@ -92,9 +92,9 @@ python3 -m pip install pillow                               # optional
 sudo apt install build-essential nasm qemu-system-x86 clang lld python3-pil
 ```
 
-**Building i686-elf-gcc from source** (any Unix; see OSDev wiki "GCC Cross-Compiler"):
+**Building x86_64-elf-gcc from source** (any Unix; see OSDev wiki "GCC Cross-Compiler"):
 ```sh
-export PREFIX="$HOME/opt/cross" TARGET=i686-elf PATH="$HOME/opt/cross/bin:$PATH"
+export PREFIX="$HOME/opt/cross" TARGET=x86_64-elf PATH="$HOME/opt/cross/bin:$PATH"
 # binutils
 ../binutils-2.42/configure --target=$TARGET --prefix="$PREFIX" --with-sysroot --disable-nls --disable-werror
 make && make install
@@ -102,8 +102,8 @@ make && make install
 ../gcc-14.1.0/configure --target=$TARGET --prefix="$PREFIX" --disable-nls --enable-languages=c --without-headers
 make all-gcc all-target-libgcc && make install-gcc install-target-libgcc
 ```
-The kernel does not link libgcc: the few 64-bit division helpers the compiler
-needs are in `kernel/libgcc.c`.
+The kernel does not link libgcc. It is built with `-mno-red-zone` (interrupts
+run on the same stack) and `-mno-sse` (no FPU/SSE state is saved on a task switch).
 
 ## Source layout
 
@@ -139,11 +139,14 @@ BIOS ──► LBA 0: MBR (arch/x86/boot/mbr.asm, 512 bytes, loaded at 0x7C00)
           │     0x20000 and copy it to 1 MiB using "unreal mode"
           │  5. load a flat GDT, set CR0.PE, far jump to 32-bit code
           ▼
-         0x100000: kernel entry (arch/x86/entry.asm): zero .bss, set up the
-          │  boot stack, call kmain(bootinfo*)   (boot info at 0x5000)
+         0x100000: kernel entry (arch/x86/entry.asm, 32-bit part): zero .bss,
+          │  check CPUID for long mode, build boot page tables (first 1 GiB,
+          │  2 MiB pages), CR4.PAE, CR3, EFER.LME, CR0.PG, load a 64-bit GDT
+          │  and far jump to 64-bit code; set up the boot stack and call
+          │  kmain(bootinfo*)   (boot info at 0x5000)
           ▼
          kmain (kernel/main.c)
-            serial + VGA text log, GDT, IDT + PIC remap        (stage 1)
+            serial + VGA text log, GDT + TSS, IDT + PIC remap  (stage 1)
             PMM, paging, heap, PIT, scheduler, self tests      (stage 2)
             PS/2 kbd + mouse, ATA, PCI                         (stage 3)
             mount NimbusFS from the boot disk, FS self test    (stage 4)
@@ -166,10 +169,11 @@ BIOS ──► LBA 0: MBR (arch/x86/boot/mbr.asm, 512 bytes, loaded at 0x7C00)
 | Virtual | Use |
 |---|---|
 | `0x00000000` | unmapped page (NULL-pointer guard) |
-| `0x00001000 – 0x00FFFFFF` | identity mapped: BIOS data, boot info + font (0x5000/0x6000), kernel at 1 MiB, page directory, PMM bitmap |
+| `0x00001000 – RAM top` | identity mapped (all RAM below 3 GiB, 2 MiB pages): BIOS data, boot info + font (0x5000/0x6000), kernel at 1 MiB, PMM bitmap, page tables, live-CD RAM disk |
 | `0xC0000000 – 0xCFFFFFFF` | kernel heap, grown page by page from the PMM |
+| `0xD0000000 – 0xD1FFFFFF` | DMA buffers and device registers (uncached) |
 | `0xE0000000 – …` | linear framebuffer (physical address from PCI BAR0) |
-| `0xFFC00000 – 0xFFFFFFFF` | recursive mapping of the page tables |
+| `0x80_0000_0000 – …` | user programs: one address space (PML4) per process |
 
 ACPI tables and other MMIO are identity mapped on demand.
 
@@ -177,8 +181,8 @@ ACPI tables and other MMIO are identity mapped on demand.
 
 ## Stage 1 – Boot
 
-**What's there:** `mbr.asm` (stage 1), `stage2.asm`, `entry.asm`, a flat GDT
-(`arch/x86/gdt.c`), 256 IDT gates generated by a NASM macro (`isr.asm`), the
+**What's there:** `mbr.asm` (stage 1), `stage2.asm`, `entry.asm` (switch to 64-bit long mode), a long-mode GDT with a TSS
+(`arch/x86/gdt.c`), 256 64-bit IDT gates generated by a NASM macro (`isr.asm`), the
 8259 PIC remapped to vectors 0x20–0x2F, a VGA text console and a COM1 serial
 logger (115200 8N1). Every kernel log line goes to the serial port.
 
@@ -194,8 +198,10 @@ that is handled and returns.
 
 * **Physical memory:** bitmap allocator, one bit per 4 KiB frame over 4 GiB,
   initialised from the E820 map (`kernel/pmm.c`).
-* **Paging:** two-level 32-bit paging with a recursive page directory
-  (`kernel/vmm.c`), NULL guard page, heap and framebuffer regions as above.
+* **Paging:** x86-64 four-level paging (`kernel/vmm.c`). All RAM is identity
+  mapped, so page tables are edited through their physical address; NULL
+  guard page, heap, DMA, MMIO and framebuffer windows as above; per-process
+  address spaces share the kernel's low 4 GiB.
 * **Heap:** `kmalloc/kzalloc/krealloc/kfree` with 16-byte headers, next-fit
   allocation, splitting, coalescing of both neighbours, magic numbers to catch
   corruption, `heap_check()` walker (`kernel/heap.c`).
@@ -203,7 +209,7 @@ that is handled and returns.
   with a 10 ms quantum. The context switch is done by the IRQ stub, which
   returns a different task's saved register frame; `task_yield`/`task_sleep`
   use a software interrupt. Per-task CPU accounting feeds Task Manager.
-* **Panic:** exceptions and `panic()` dump EAX–EDI, EIP, EFLAGS, segment and
+* **Panic:** exceptions and `panic()` dump RAX–R15, RIP, RFLAGS, CS/SS and
   control registers (CR2 for page faults) to serial and to the screen (VGA
   text early, a blue framebuffer screen once graphics are on).
 
@@ -453,7 +459,7 @@ address bar). Only `http://` is supported – there is no TLS.
   that it only works on Bochs/QEMU/VirtualBox-style adapters (`-vga std`).
 * **Identity-mapped kernel** instead of a higher-half kernel: simpler to boot.
   The VMM still provides a real virtual map: NULL guard, heap and framebuffer
-  windows, recursive page tables.
+  windows, per-process user address spaces.
 * **Kernel threads only (ring 0):** apps are event handlers inside the
   "desktop" task, much like a classic single-threaded GUI toolkit. That keeps
   the window manager lock-free. Preemption is real (the scheduler and the
@@ -474,7 +480,7 @@ address bar). Only `http://` is supported – there is no TLS.
 ## References
 
 * Intel® 64 and IA-32 Architectures Software Developer's Manual, Vol. 3A
-  (protected mode, descriptors, interrupts, paging).
+  (protected mode, IA-32e/long mode, descriptors, interrupts, 4-level paging).
 * OSDev wiki: *Rolling Your Own Bootloader*, *Unreal Mode*, *A20 Line*,
   *Detecting Memory (x86)*, *GDT*, *IDT*, *8259 PIC*, *PIT*, *PS/2 Keyboard*,
   *PS/2 Mouse*, *8042 PS/2 Controller*, *ATA PIO Mode*, *PCI*, *Bochs VBE

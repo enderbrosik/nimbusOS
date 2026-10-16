@@ -29,9 +29,9 @@ static void test_vmm(void)
     u32 virt = 0xDEAD0000;
     ASSERT(vmm_map(virt, frame, PTE_WRITE));
     ASSERT(vmm_translate(virt + 0x123) == frame + 0x123);
-    *(volatile u32 *)virt = 0xCAFEBABE;
+    *(volatile u32 *)(uptr)virt = 0xCAFEBABE;
     /* The identity map must show the same physical frame. */
-    ASSERT(frame < VMM_IDENTITY_END ? *(volatile u32 *)frame == 0xCAFEBABE : 1);
+    ASSERT(frame < VMM_IDENTITY_END ? *(volatile u32 *)(uptr)frame == 0xCAFEBABE : 1);
     ASSERT(vmm_unmap(virt) == frame);
     ASSERT(vmm_translate(virt) == 0);
     pmm_free(frame);

@@ -61,7 +61,7 @@ static void build_ui_font(void)
 void gfx_init(void)
 {
     if (g_bootinfo.font_addr) {
-        memcpy(font, (void *)g_bootinfo.font_addr, sizeof font);
+        memcpy(font, (void *)(uptr)g_bootinfo.font_addr, sizeof font);
         font_ok = true;
     } else {
         /* No ROM font: render every glyph as a hollow box. */

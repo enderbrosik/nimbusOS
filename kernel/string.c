@@ -4,13 +4,13 @@
 void *memcpy(void *dst, const void *src, size_t n)
 {
     void *ret = dst;
-    u32 d0, d1, d2;
-    /* Bulk copy with rep movsd, then the tail with rep movsb. */
-    __asm__ volatile("rep movsl\n\t"
-                     "movl %4, %%ecx\n\t"
+    u64 d0, d1, d2;
+    /* Bulk copy with rep movsq, then the tail with rep movsb. */
+    __asm__ volatile("rep movsq\n\t"
+                     "movq %4, %%rcx\n\t"
                      "rep movsb"
                      : "=&c"(d0), "=&D"(d1), "=&S"(d2)
-                     : "0"(n >> 2), "g"(n & 3), "1"(dst), "2"(src)
+                     : "0"(n >> 3), "g"(n & 7), "1"(dst), "2"(src)
                      : "memory");
     return ret;
 }
@@ -30,14 +30,14 @@ void *memmove(void *dst, const void *src, size_t n)
 void *memset(void *dst, int c, size_t n)
 {
     void *ret = dst;
-    u32 d0, d1;
+    u64 d0, d1;
     __asm__ volatile("rep stosb" : "=&c"(d0), "=&D"(d1) : "0"(n), "1"(dst), "a"(c) : "memory");
     return ret;
 }
 
 void memset32(u32 *dst, u32 v, size_t count)
 {
-    u32 d0, d1;
+    u64 d0, d1;
     __asm__ volatile("rep stosl" : "=&c"(d0), "=&D"(d1) : "0"(count), "1"(dst), "a"(v) : "memory");
 }
 

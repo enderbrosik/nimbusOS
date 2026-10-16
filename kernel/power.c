@@ -39,20 +39,20 @@ static const u8 *find_rsdp(void)
     vmm_unmap(0);
     if (ebda >= 0x80000 && ebda < 0xA0000)
         for (u32 a = ebda; a < ebda + 1024; a += 16)
-            if (!memcmp((void *)a, "RSD PTR ", 8) && checksum((u8 *)a, 20)) return (u8 *)a;
+            if (!memcmp((void *)(uptr)a, "RSD PTR ", 8) && checksum((u8 *)(uptr)a, 20)) return (u8 *)(uptr)a;
     for (u32 a = 0xE0000; a < 0x100000; a += 16)
-        if (!memcmp((void *)a, "RSD PTR ", 8) && checksum((u8 *)a, 20)) return (u8 *)a;
+        if (!memcmp((void *)(uptr)a, "RSD PTR ", 8) && checksum((u8 *)(uptr)a, 20)) return (u8 *)(uptr)a;
     return NULL;
 }
 
 static const u8 *map_table(u32 phys)
 {
     vmm_identity_map(phys, 36);
-    u32 len = *(u32 *)(phys + 4);
+    u32 len = *(u32 *)(uptr)(phys + 4);
     if (len < 36 || len > 0x100000) return NULL;
     vmm_identity_map(phys, len);
-    if (!checksum((u8 *)phys, len)) return NULL;
-    return (const u8 *)phys;
+    if (!checksum((u8 *)(uptr)phys, len)) return NULL;
+    return (const u8 *)(uptr)phys;
 }
 
 /* Parse "\_S5_" Package in AML: 08 '_S5_' 12 PkgLength NumElements
@@ -137,7 +137,7 @@ void power_reboot(void)
     for (int i = 0; i < 100000 && (inb(0x64) & 2); i++) {}
     outb(0x64, 0xFE);                 /* pulse CPU reset line */
     for (volatile int i = 0; i < 1000000; i++) {}
-    struct { u16 limit; u32 base; } PACKED null_idt = { 0, 0 };
+    struct { u16 limit; u64 base; } PACKED null_idt = { 0, 0 };
     __asm__ volatile("lidt %0; int3" :: "m"(null_idt));   /* triple fault */
     for (;;) hlt();
 }

@@ -20,7 +20,7 @@ class Qemu:
         self.outdir = outdir
         self.serial_path = os.path.join(outdir, name + "-serial.log")
         self.mon_path = os.path.join(tempfile.mkdtemp(), "mon.sock")
-        args = ["qemu-system-i386", "-m", mem, "-vga", "std", "-display", "none",
+        args = ["qemu-system-x86_64", "-m", mem, "-vga", "std", "-display", "none",
                 "-serial", "file:" + self.serial_path,
                 "-monitor", "unix:%s,server,nowait" % self.mon_path, "-no-shutdown",
                 # AC'97 card; audio is discarded unless a WAV capture file is given

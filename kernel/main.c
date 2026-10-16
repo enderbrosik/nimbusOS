@@ -87,7 +87,7 @@ void kmain(struct bootinfo *bi)
             bi->boot_drive, bi->kernel_sectors, bi->kernel_lba, bi->disk_signature);
 
     gdt_init();
-    kprintf("[cpu ] GDT loaded\n");
+    kprintf("[cpu ] long mode active, GDT + TSS loaded\n");
     idt_init();
     kprintf("[cpu ] IDT loaded, PIC remapped to 0x20-0x2F\n");
     sti();
@@ -96,7 +96,7 @@ void kmain(struct bootinfo *bi)
 
     /* ---- Stage 2: core kernel ---- */
     pmm_init();
-    vmm_init();
+    vmm_init(pmm_ram_top());
     heap_init();
     pit_init();
     tasking_init();

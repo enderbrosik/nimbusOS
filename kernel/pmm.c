@@ -13,6 +13,7 @@
 #define MAX_FRAMES (1024 * 1024)
 static u32 bitmap[MAX_FRAMES / 32];
 static u32 total_frames, free_frames, search_hint;
+static u64 ram_top;
 extern char __kernel_start[], __kernel_end[];
 
 static inline void set_used(u32 f) { bitmap[f >> 5] |= 1u << (f & 31); }
@@ -22,7 +23,7 @@ static inline bool is_used(u32 f) { return bitmap[f >> 5] & (1u << (f & 31)); }
 void pmm_init(void)
 {
     memset(bitmap, 0xFF, sizeof bitmap);
-    struct e820_entry *e = (struct e820_entry *)g_bootinfo.mmap_addr;
+    struct e820_entry *e = (struct e820_entry *)(uptr)g_bootinfo.mmap_addr;
     u64 top = 0;
     for (u32 i = 0; i < g_bootinfo.mmap_count; i++) {
         klog("[pmm ] e820 %08x%08x len %08x%08x type %u\n",
@@ -30,20 +31,22 @@ void pmm_init(void)
         if (e[i].type != 1) continue;
         u64 start = (e[i].base + PAGE_SIZE - 1) & ~(u64)(PAGE_SIZE - 1);
         u64 end = (e[i].base + e[i].length) & ~(u64)(PAGE_SIZE - 1);
-        if (end > 0x100000000ULL) end = 0x100000000ULL;
+        /* Only RAM the VMM identity maps (below 3 GiB) is handed out. */
+        if (end > 0xC0000000ULL) end = 0xC0000000ULL;
         for (u64 a = start; a < end; a += PAGE_SIZE) {
             u32 f = (u32)(a >> 12);
             if (is_used(f)) { set_free(f); free_frames++; total_frames++; }
         }
         if (end > top) top = end;
     }
+    ram_top = top ? top : 0x2000000;
     if (g_bootinfo.mmap_count == 0) {
         /* No E820: assume 32 MiB of RAM above 1 MiB. */
         for (u32 f = 256; f < 8192; f++) { set_free(f); free_frames++; total_frames++; }
     }
     /* Reserve the first 1 MiB (IVT, BIOS data, boot structures, VGA, ROMs)
      * and the kernel image including .bss. */
-    u32 kend = ((u32)__kernel_end + PAGE_SIZE - 1) / PAGE_SIZE;
+    u32 kend = ((uptr)__kernel_end + PAGE_SIZE - 1) / PAGE_SIZE;
     for (u32 f = 0; f < kend; f++)
         if (!is_used(f)) { set_used(f); free_frames--; }
     search_hint = kend;
@@ -53,7 +56,7 @@ void pmm_init(void)
         u32 last = (g_bootinfo.ramdisk_addr + g_bootinfo.ramdisk_sectors * 512 + PAGE_SIZE - 1) / PAGE_SIZE;
         for (u32 f = first; f < last; f++)
             if (!is_used(f)) { set_used(f); free_frames--; }
-        kprintf("[pmm ] reserved RAM disk %p, %u KiB\n", (void *)g_bootinfo.ramdisk_addr, g_bootinfo.ramdisk_sectors / 2);
+        kprintf("[pmm ] reserved RAM disk %p, %u KiB\n", (void *)(uptr)g_bootinfo.ramdisk_addr, g_bootinfo.ramdisk_sectors / 2);
     }
     kprintf("[pmm ] %u MiB usable, %u frames free, kernel ends at %p\n",
             total_frames / 256, free_frames, __kernel_end);
@@ -89,4 +92,5 @@ void pmm_free(u32 phys)
 }
 
 u32 pmm_total_frames(void) { return total_frames; }
+u64 pmm_ram_top(void) { return ram_top; }
 u32 pmm_free_frames(void) { return free_frames; }
