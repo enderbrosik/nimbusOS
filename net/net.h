@@ -14,6 +14,7 @@
 #define NET_EPROTO    -7
 #define NET_ENOTFOUND -8
 #define NET_EDNS      -9
+#define NET_ETLS      -10   /* see net_tls_error() for the detail */
 
 struct netif {
     bool present, configured;
@@ -24,6 +25,7 @@ struct netif {
 extern struct netif g_net;
 
 void net_init(void);                        /* NIC + network task + DHCP in the background */
+void rng_stir(u64 v);                       /* net/rng.c: mix a value into the random pool */
 const char *net_strerror(int e);
 void ip_to_str(u32 ip, char *out);          /* out >= 16 bytes */
 bool ip_from_str(const char *s, u32 *ip);
@@ -40,5 +42,7 @@ void tcp_close(int s);
 
 /* HTTP/1.0 GET of an http:// URL (follows up to 3 redirects).  *body is
  * kmalloc'ed; *status gets the HTTP status code. */
+const char *net_tls_error(void);            /* detail for NET_ETLS */
+const char *http_last_security(void);       /* cipher of the last https request, "" for http */
 int  http_get(const char *url, char **body, u32 *len, int *status, char *final_url, int urlmax);
 #endif

@@ -228,7 +228,7 @@ static void cmd_help(struct term *t, int argc, char **argv)
         "  play <file.wav>     play a sound file (beep [hz] [ms], volume [0-100|mute])",
         "  ifconfig / dhcp     network status / renew the DHCP lease",
         "  ping <host> [n]     ICMP echo;  nslookup <name>   DNS lookup",
-        "  wget <url> [file]   download over HTTP;  http <url>  print a page",
+        "  wget <url> [file]   download over HTTP(S);  http <url>  print a page",
         "  history / exit / shutdown / reboot / uname",
         "",
         "Programs: any ELF64 executable runs as a user-mode process, e.g. the",
@@ -721,7 +721,7 @@ static void on_event(window_t *w, event_t *ev)
                     abs_path(t, name, p);
                     int r = vfs_write_all(p, data, len);
                     if (r) err("wget", name, r);
-                    else out(C_PROMPT, "Saved %u bytes to %s\n", len, p);
+                    else { out(C_PROMPT, "Saved %u bytes to %s\n", len, p); klog("[term] saved %u bytes to %s\n", len, p); }
                     kfree(data);
                 }
                 netjob_release(t->job);

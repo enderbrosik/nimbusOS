@@ -13,6 +13,7 @@
  * enough on this uniprocessor kernel.
  */
 #include "net/net.h"
+#include "net/tls.h"
 #include "drivers/e1000.h"
 #include "drivers/pit.h"
 #include "kernel/task.h"
@@ -62,7 +63,8 @@ const char *net_strerror(int e)
     case NET_ERESET: return "connection reset";
     case NET_ENOMEM: return "out of memory";
     case NET_ENODEV: return "no network";
-    case NET_EBADURL: return "bad URL (only http:// is supported)";
+    case NET_EBADURL: return "bad URL (use http:// or https://)";
+    case NET_ETLS: return net_tls_error()[0] ? net_tls_error() : "secure connection failed";
     case NET_EPROTO: return "protocol error";
     case NET_ENOTFOUND: return "name not found";
     case NET_EDNS: return "DNS server failure";
@@ -744,6 +746,7 @@ static void net_task(void *arg)
     for (;;) {
         int n, budget = 64;
         while (budget-- && (n = e1000_poll(frame, sizeof frame)) > 14) {
+            rng_stir((u64)n << 32 | frame[n - 1]);     /* packet timing feeds the TLS random pool */
             u32 f = irq_save();
             g_net.rx_packets++;
             g_net.rx_bytes += n;
@@ -780,79 +783,213 @@ void net_init(void)
 /* ====================================================================
  * HTTP
  * ================================================================== */
-static int parse_url(const char *url, char *host, int hostmax, u16 *port, char *path, int pathmax)
+/* "http://host[:port]/path" or "https://host[:port]/path" */
+static int parse_url(const char *url, bool *tls, char *host, int hostmax, u16 *port, char *path, int pathmax)
 {
-    if (strncmp(url, "http://", 7)) return NET_EBADURL;
-    const char *h = url + 7;
+    const char *h;
+    if (!strncmp(url, "http://", 7)) { *tls = false; h = url + 7; *port = 80; }
+    else if (!strncmp(url, "https://", 8)) { *tls = true; h = url + 8; *port = 443; }
+    else return NET_EBADURL;
     const char *slash = strchr(h, '/');
     int hl = slash ? (int)(slash - h) : (int)strlen(h);
     if (hl <= 0 || hl >= hostmax) return NET_EBADURL;
     memcpy(host, h, hl);
     host[hl] = 0;
-    *port = 80;
     char *colon = strchr(host, ':');
     if (colon) { *colon = 0; *port = (u16)atoi(colon + 1); }
+    if (!host[0]) return NET_EBADURL;
     strlcpy(path, slash ? slash : "/", pathmax);
     return 0;
+}
+
+/* A connection: plain TCP, or TLS on top of it. */
+struct conn { int sock; struct tls *tls; };
+
+static int tcp_io_send(void *ctx, const void *buf, u32 len) { return tcp_send(((struct conn *)ctx)->sock, buf, len); }
+static int tcp_io_recv(void *ctx, void *buf, u32 max, u32 timeout)
+{
+    return tcp_recv(((struct conn *)ctx)->sock, buf, max, timeout);
+}
+
+static char last_tls_error[96], last_tls_info[64];
+const char *net_tls_error(void) { return last_tls_error; }
+const char *http_last_security(void) { return last_tls_info; }
+
+static int conn_open(struct conn *c, u32 ip, u16 port, bool use_tls, const char *host)
+{
+    c->tls = NULL;
+    c->sock = tcp_connect(ip, port, 6000);
+    if (c->sock < 0) return c->sock;
+    if (!use_tls) return 0;
+    struct tls_io io = { c, tcp_io_send, tcp_io_recv };
+    c->tls = tls_new(&io, host);
+    if (!c->tls) { tcp_close(c->sock); return NET_ENOMEM; }
+    int r = tls_handshake(c->tls, 10000);
+    if (r) {
+        if (r == TLS_EALERT) snprintf(last_tls_error, sizeof last_tls_error, "%s (alert %d)", tls_strerror(r), tls_last_alert(c->tls));
+        else strlcpy(last_tls_error, tls_strerror(r), sizeof last_tls_error);
+        klog("[tls ] handshake with %s failed: %s\n", host, last_tls_error);
+        tls_free(c->tls);
+        tcp_close(c->sock);
+        return NET_ETLS;
+    }
+    strlcpy(last_tls_info, tls_cipher_name(c->tls), sizeof last_tls_info);
+    klog("[tls ] connected to %s: %s (certificate not verified)\n", host, last_tls_info);
+    return 0;
+}
+
+static int conn_send(struct conn *c, const void *buf, u32 len)
+{
+    return c->tls ? tls_write(c->tls, buf, len) : tcp_send(c->sock, buf, len);
+}
+
+static int conn_recv(struct conn *c, void *buf, u32 max, u32 timeout)
+{
+    if (!c->tls) return tcp_recv(c->sock, buf, max, timeout);
+    int r = tls_read(c->tls, buf, max, timeout);
+    return r < 0 && r != TLS_EIO ? NET_ETLS : r;
+}
+
+static void conn_close(struct conn *c)
+{
+    if (c->tls) { tls_close(c->tls); tls_free(c->tls); }
+    tcp_close(c->sock);
+}
+
+/* Find header `name` (case-insensitive) between buf and hdr_end; returns
+ * a pointer to its value (leading spaces skipped), NULL if absent. */
+static char *find_header(char *buf, char *hdr_end, const char *name)
+{
+    u32 nl = strlen(name);
+    for (char *l = strstr(buf, "\r\n"); l && l < hdr_end; l = strstr(l, "\r\n")) {
+        l += 2;
+        if (!strncasecmp(l, name, nl) && l[nl] == ':') {
+            char *v = l + nl + 1;
+            while (*v == ' ' || *v == '\t') v++;
+            return v;
+        }
+    }
+    return NULL;
+}
+
+/* Decode a "Transfer-Encoding: chunked" body in place; returns its length. */
+static u32 dechunk(char *body, u32 len)
+{
+    u32 in = 0, out = 0;
+    while (in < len) {
+        u32 size = 0;
+        bool digits = false;
+        while (in < len) {
+            char ch = body[in];
+            int d = ch >= '0' && ch <= '9' ? ch - '0' : (ch | 32) >= 'a' && (ch | 32) <= 'f' ? (ch | 32) - 'a' + 10 : -1;
+            if (d < 0) break;
+            size = size * 16 + d;
+            digits = true;
+            in++;
+        }
+        char *eol = strstr(body + in, "\r\n");      /* skip chunk extensions */
+        if (!digits || !eol) break;
+        in = (u32)(eol - body) + 2;
+        if (size == 0) break;
+        if (size > len - in) size = len - in;      /* truncated: keep what we have */
+        memmove(body + out, body + in, size);
+        out += size;
+        in += size + 2;                            /* data + CRLF */
+    }
+    body[out] = 0;
+    return out;
+}
+
+/* Resolve a Location header against the URL it came from. */
+static void resolve_location(const char *loc, bool tls, const char *host, u16 port, const char *path,
+                             char *out, int max)
+{
+    const char *scheme = tls ? "https" : "http";
+    u16 def = tls ? 443 : 80;
+    char hostport[160];
+    if (port == def) strlcpy(hostport, host, sizeof hostport);
+    else snprintf(hostport, sizeof hostport, "%s:%u", host, port);
+    if (!strncmp(loc, "http://", 7) || !strncmp(loc, "https://", 8)) strlcpy(out, loc, max);
+    else if (loc[0] == '/' && loc[1] == '/') snprintf(out, max, "%s:%s", scheme, loc);
+    else if (loc[0] == '/') snprintf(out, max, "%s://%s%s", scheme, hostport, loc);
+    else {
+        char dir[384];
+        strlcpy(dir, path, sizeof dir);
+        char *q = strchr(dir, '?');
+        if (q) *q = 0;
+        char *slash = strrchr(dir, '/');
+        if (slash) slash[1] = 0;
+        snprintf(out, max, "%s://%s%s%s", scheme, hostport, dir, loc);
+    }
 }
 
 int http_get(const char *url_in, char **body, u32 *blen, int *status, char *final_url, int urlmax)
 {
     char url[512];
     strlcpy(url, url_in, sizeof url);
-    for (int redirects = 0; redirects < 4; redirects++) {
+    last_tls_info[0] = 0;
+    for (int redirects = 0; redirects < 6; redirects++) {
         char host[128], path[384];
         u16 port;
-        int r = parse_url(url, host, sizeof host, &port, path, sizeof path);
+        bool use_tls;
+        int r = parse_url(url, &use_tls, host, sizeof host, &port, path, sizeof path);
         if (r) return r;
         u32 ip;
         r = net_resolve(host, &ip, 5000);
         if (r) return r;
-        int s = tcp_connect(ip, port, 6000);
-        if (s < 0) return s;
-        char req[640];
-        int n = snprintf(req, sizeof req, "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: NimbusOS/1.0\r\nAccept: text/html, text/plain\r\nConnection: close\r\n\r\n", path, host);
-        tcp_send(s, req, n);
+        struct conn c;
+        r = conn_open(&c, ip, port, use_tls, host);
+        if (r) return r;
+        char req[768];
+        int n = snprintf(req, sizeof req,
+            "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: NimbusOS/0.2\r\nAccept: text/html, text/plain, */*\r\n"
+            "Accept-Encoding: identity\r\nConnection: close\r\n\r\n", path, host);
+        if (conn_send(&c, req, n) < 0) { conn_close(&c); return NET_ERESET; }
         u32 cap = 16384, len = 0;
         char *buf = kmalloc(cap + 1);
+        if (!buf) { conn_close(&c); return NET_ENOMEM; }
+        int got = 0;
         for (;;) {
             if (len == cap) {
-                if (cap >= 2 * 1024 * 1024) break;
+                if (cap >= 4 * 1024 * 1024) break;
                 cap *= 2;
                 char *nb = krealloc(buf, cap + 1);
                 if (!nb) break;
                 buf = nb;
             }
-            int got = tcp_recv(s, buf + len, cap - len, 10000);
+            got = conn_recv(&c, buf + len, cap - len, 10000);
             if (got <= 0) break;
             len += got;
         }
-        tcp_close(s);
+        conn_close(&c);
         buf[len] = 0;
         char *hdr_end = strstr(buf, "\r\n\r\n");
-        if (strncmp(buf, "HTTP/1.", 7) || !hdr_end) { kfree(buf); return NET_EPROTO; }
+        if (strncmp(buf, "HTTP/1.", 7) || !hdr_end) {
+            kfree(buf);
+            return got == NET_ETLS ? NET_ETLS : NET_EPROTO;
+        }
         int code = atoi(buf + 9);
-        if ((code == 301 || code == 302 || code == 303 || code == 307 || code == 308)) {
-            char *loc = NULL;
-            for (char *l = buf; l < hdr_end; l = strstr(l, "\r\n") + 2) {
-                if (!strncmp(l, "Location:", 9) || !strncmp(l, "location:", 9)) { loc = l + 9; break; }
-                if (!strstr(l, "\r\n")) break;
-            }
+        if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
+            char *loc = find_header(buf, hdr_end, "Location");
             if (loc) {
-                while (*loc == ' ') loc++;
                 char *e = strstr(loc, "\r\n");
                 if (e) *e = 0;
-                if (loc[0] == '/') snprintf(url, sizeof url, "http://%s:%u%s", host, port, loc);
-                else strlcpy(url, loc, sizeof url);
+                char next[512];
+                resolve_location(loc, use_tls, host, port, path, next, sizeof next);
+                klog("[http] %d redirect to %s\n", code, next);
+                strlcpy(url, next, sizeof url);
                 kfree(buf);
-                if (strncmp(url, "http://", 7)) return NET_EBADURL;   /* e.g. a redirect to https */
                 continue;
             }
         }
+        char *te = find_header(buf, hdr_end, "Transfer-Encoding");
+        bool chunked = te && !strncasecmp(te, "chunked", 7);
         u32 hlen = (u32)(hdr_end + 4 - buf);
         memmove(buf, buf + hlen, len - hlen + 1);
+        len -= hlen;
+        if (chunked) len = dechunk(buf, len);
         *body = buf;
-        *blen = len - hlen;
+        *blen = len;
         *status = code;
         if (final_url) strlcpy(final_url, url, urlmax);
         return 0;

@@ -117,7 +117,8 @@ gui/           gfx (primitives + font), wm (compositor/window manager), desktop,
                dialogs (message/input/file), icons, cursor, BMP codec, clipboard
 apps/          explorer, notepad, paint, terminal, taskmgr, sysprops, settings, minesweeper, snake,
                solitaire, mediaplayer, web browser, app registry
-net/           TCP/IP stack (net.c) and background network jobs (netjob.c)
+net/           TCP/IP stack (net.c), TLS 1.3 client (tls.c), crypto (crypto.c), random pool (rng.c),
+               background network jobs (netjob.c)
 installer/     graphical installer
 user/          user-mode C library (lib/), headers (include/), sample programs (programs/), linker script
 tools/         mkimage, nfstool (formatter + file tool), fstest (FS test suite), mkwallpaper,
@@ -452,7 +453,7 @@ with `-mcmodel=large` (they live above 4 GiB) and no SSE.
 **Writing a program:** put `myprog.c` in `user/programs/` and run `make`. It
 is built, linked with `user/linker.ld` and installed as `/Programs/myprog.elf`.
 
-## Beyond the stages: games, polish, sound, networking
+## Beyond the stages: games, polish, sound, networking, HTTPS
 
 **Games** (Start menu ▸ Games, and on the desktop): Minesweeper (three
 difficulties, first click is always safe, chording), Snake (speeds up as it
@@ -488,12 +489,30 @@ DHCP, DNS, TCP (client, with retransmission) and HTTP/1.0. Terminal commands:
 | `dhcp` | renew the lease |
 | `ping <host>` | ICMP echo (QEMU's user network answers for 10.0.2.2) |
 | `nslookup <name> [server]` | DNS A lookup |
-| `wget <url> [file]` | HTTP download into the file system |
+| `wget <url> [file]` | HTTP or HTTPS download into the file system |
 | `http <url>` | print a page |
 
 The **Web Browser** (Start menu) is a text-mode HTML viewer: it renders
 headings, paragraphs, lists, `<pre>` and links (click to follow, Back,
-address bar). Only `http://` is supported – there is no TLS.
+address bar). It opens `http://` and `https://` pages; Unicode text is
+shown as its closest ASCII spelling (the UI font is ASCII).
+
+**HTTPS:** a TLS 1.3 client written from scratch (`net/tls.c`), with its
+own cryptography (`net/crypto.c`): SHA-256, HMAC, HKDF, X25519 key
+exchange, and the AES-128-GCM and ChaCha20-Poly1305 ciphers. The HTTP
+client speaks HTTP/1.1 (including chunked responses) and follows
+redirects, so `http://` sites that move to `https://` work.
+
+> **Certificates are not checked.** Connections are encrypted and
+> tamper-proof, but NimbusOS does not verify the server's certificate, so
+> it cannot prove which server it is talking to. The browser's status bar
+> says so on every secure page. Don't use it for anything that matters.
+
+Tests: `make test` runs `tools/cryptotest` (official test vectors from the
+RFCs and NIST, 25 checks); `tools/test_https.py` boots NimbusOS against
+OpenSSL's `s_server` on the host (one server per cipher suite) and checks
+downloads, chunked responses, an http→https redirect and the browser.
+`build/tools/tlstest <host> <port>` tries the TLS client from the host.
 
 ---
 
@@ -520,7 +539,8 @@ address bar). Only `http://` is supported – there is no TLS.
 
 ## Known limitations
 
-* No USB, no TLS/HTTPS, TCP is client-only.
+* No USB. TCP is client-only. HTTPS does not verify certificates, supports only
+  TLS 1.3 with X25519, and the browser shows no images, CSS or JavaScript.
 * User programs are console programs: no GUI API, no fork/exec from user
   space, no FPU/SSE in user mode, whole-file I/O only.
 * LBA28 ATA PIO only (disks up to 128 GiB); no AHCI.

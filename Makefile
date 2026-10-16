@@ -120,9 +120,19 @@ $(BUILD)/tools/%: tools/%.c fs/nbfs.c fs/nbfs.h tools/hostdev.h
 fsimage: $(NFSTOOL)
 	$(NFSTOOL) mkfs $(BUILD)/empty-fs.img 16 EMPTY
 
-test: $(BUILD)/tools/fstest
+# Crypto test vectors and a TLS client test tool (both link net/ code on the host).
+$(BUILD)/tools/cryptotest: tools/cryptotest.c net/crypto.c net/crypto.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) tools/cryptotest.c net/crypto.c -o $@
+
+$(BUILD)/tools/tlstest: tools/tlstest.c net/tls.c net/tls.h net/crypto.c net/crypto.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) tools/tlstest.c net/tls.c net/crypto.c -o $@
+
+test: $(BUILD)/tools/fstest $(BUILD)/tools/cryptotest
 	@mkdir -p $(BUILD)/test
 	$(BUILD)/tools/fstest
+	$(BUILD)/tools/cryptotest
 
 NFSTOOL := $(BUILD)/tools/nfstool
 MKWALL  := $(BUILD)/tools/mkwallpaper
@@ -214,6 +224,7 @@ test-all: test $(IMG)
 	python3 tools/test_iso.py
 	python3 tools/test_net.py
 	python3 tools/test_user.py
+	python3 tools/test_https.py
 
 clean:
 	rm -rf $(BUILD)

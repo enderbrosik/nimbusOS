@@ -138,9 +138,9 @@ static void do_nslookup(struct netjob *j)
 
 static void do_http(struct netjob *j, bool save)
 {
-    if (j->argc < 2) { say(j, true, "usage: %s <http://host/path>%s", j->args[0], save ? " [file]" : ""); return; }
+    if (j->argc < 2) { say(j, true, "usage: %s <http(s)://host/path>%s", j->args[0], save ? " [file]" : ""); return; }
     char url[256];
-    if (strncmp(j->args[1], "http://", 7)) snprintf(url, sizeof url, "http://%s", j->args[1]);
+    if (strncmp(j->args[1], "http://", 7) && strncmp(j->args[1], "https://", 8)) snprintf(url, sizeof url, "http://%s", j->args[1]);
     else strlcpy(url, j->args[1], sizeof url);
     say(j, false, "Fetching %s ...", url);
     u64 t0 = timer_ticks();
@@ -151,10 +151,19 @@ static void do_http(struct netjob *j, bool save)
     if (r) { say(j, true, "%s: %s", j->args[0], net_strerror(r)); return; }
     u32 ms = (u32)(timer_ticks() - t0);
     say(j, false, "HTTP %d, %u bytes in %u ms", status, len, ms);
+    if (!strncmp(j->final_url, "https://", 8))
+        say(j, false, "Encrypted: %s (certificate not verified)", http_last_security());
     if (save) {
-        const char *n = j->argc > 2 ? j->args[2] : strrchr(j->final_url + 7, '/');
-        if (!n || !n[0] || !strcmp(n, "/")) n = "index.html";
-        if (n[0] == '/') n++;
+        /* file name: the last path segment of the final URL, without a query */
+        const char *after_host = strchr(j->final_url + (j->final_url[4] == 's' ? 8 : 7), '/');
+        char seg[64] = "";
+        if (after_host) {
+            const char *last = strrchr(after_host, '/') + 1;
+            strlcpy(seg, last, sizeof seg);
+            char *q = strchr(seg, '?');
+            if (q) *q = 0;
+        }
+        const char *n = j->argc > 2 ? j->args[2] : seg;
         if (!n[0]) n = "index.html";
         strlcpy(j->name, n, sizeof j->name);
         j->body = body;

@@ -1,12 +1,13 @@
 /*
- * NimbusOS - Web Browser (text mode, http:// only).
+ * NimbusOS - Web Browser (text mode, http:// and https://).
  *
- * Pages are fetched by a worker task (net/netjob.c) and turned into a list
+ * Pages (http:// or https:// through the TLS 1.3 client in net/tls.c) are
+ * fetched by a worker task (net/netjob.c) and turned into a list
  * of styled words by a forgiving HTML scanner: block tags become paragraph
  * breaks, h1-h6 headings, <a href> links, <li> bullets, <pre> keeps its
  * line breaks, <script>/<style> are skipped and common entities decoded.
  * The words are then laid out with the UI font to the window width.
- * There is no TLS, so https:// links are reported instead of followed.
+ * https pages are encrypted, but the server's certificate is not checked.
  */
 #include "apps/apps.h"
 #include "gui/wm.h"
@@ -34,7 +35,7 @@ struct run { int x, line; u32 off, len; u8 style; i16 link; };
 
 struct web {
     textfield_t addr;
-    char url[256], title[96], status[128];
+    char url[256], title[96], status[192];
     char history[HISTORY][256];
     int nhist;
     /* document */
@@ -79,25 +80,122 @@ static void add_item(struct web *b, int type, int style, int link, const char *s
     if (len) { memcpy(b->text + b->tlen, s, len); b->tlen += len; }
 }
 
-static int entity(const char *p, int *consumed)
+/* The UI font is ASCII, so Unicode text is shown as its closest ASCII
+ * spelling: curly quotes become straight ones, dashes '-', accented
+ * letters their base letter, invisible characters nothing at all. */
+static const char *uni_ascii(u32 cp, char tmp[2])
 {
-    static const struct { const char *n; int c; } ents[] = {
-        { "amp;", '&' }, { "lt;", '<' }, { "gt;", '>' }, { "quot;", '"' }, { "apos;", '\'' }, { "#39;", '\'' },
-        { "nbsp;", ' ' }, { "copy;", 'c' }, { "mdash;", '-' }, { "ndash;", '-' }, { "hellip;", '.' },
+    static const char latin1[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";
+    if (cp >= 32 && cp < 127) { tmp[0] = (char)cp; tmp[1] = 0; return tmp; }
+    if (cp >= 0xC0 && cp <= 0xFF) {
+        if (cp == 0xDF) return "ss";
+        if (cp == 0xC6) return "AE";
+        if (cp == 0xE6) return "ae";
+        tmp[0] = latin1[cp - 0xC0]; tmp[1] = 0;
+        return tmp;
+    }
+    switch (cp) {
+    case 0x09: case 0x0A: case 0xA0: case 0x2002: case 0x2003: case 0x2009: case 0x202F: return " ";
+    case 0xAD: case 0x200B: case 0x200C: case 0x200D: case 0x200E: case 0x200F: case 0xFEFF: return "";
+    case 0x2018: case 0x2019: case 0x201A: case 0x2032: case 0xB4: return "'";
+    case 0x201C: case 0x201D: case 0x201E: case 0x2033: return "\"";
+    case 0x2010: case 0x2011: case 0x2012: case 0x2013: case 0x2014: case 0x2015: case 0x2212: return "-";
+    case 0x2026: return "...";
+    case 0x2022: case 0xB7: case 0x2027: case 0x25CF: return "*";
+    case 0xA9: return "(c)";
+    case 0xAE: return "(R)";
+    case 0x2122: return "(TM)";
+    case 0xAB: return "<<";
+    case 0xBB: return ">>";
+    case 0x2039: return "<";
+    case 0x203A: return ">";
+    case 0xD7: return "x";
+    case 0xF7: return "/";
+    case 0xB0: return " deg";
+    case 0xB1: return "+/-";
+    case 0xBD: return "1/2";
+    case 0xBC: return "1/4";
+    case 0xBE: return "3/4";
+    case 0x20AC: return "EUR";
+    case 0xA3: return "GBP";
+    case 0xA5: return "JPY";
+    case 0xA2: return "c";
+    case 0xA7: return "S";
+    case 0xB6: return "P";
+    case 0x2190: return "<-";
+    case 0x2192: return "->";
+    case 0x2191: return "^";
+    case 0x2193: return "v";
+    case 0x2194: return "<->";
+    case 0x21D2: return "=>";
+    case 0x2264: return "<=";
+    case 0x2265: return ">=";
+    case 0x2260: return "!=";
+    case 0x2248: return "~";
+    case 0x221E: return "inf";
+    case 0x2713: case 0x2714: return "v";
+    case 0x00BF: return "?";
+    case 0x00A1: return "!";
+    default: return "?";
+    }
+}
+
+/* Decode one character at p (UTF-8, or a Latin-1 byte when the bytes are
+ * not valid UTF-8); returns its code point and sets *len. */
+static u32 utf8_decode(const char *p, int *len)
+{
+    const u8 *u = (const u8 *)p;
+    int n = u[0] >= 0xF0 ? 4 : u[0] >= 0xE0 ? 3 : u[0] >= 0xC2 ? 2 : 1;
+    if (n > 1 && u[0] < 0xF5) {
+        u32 cp = u[0] & (0x7F >> n);
+        int k = 1;
+        for (; k < n && (u[k] & 0xC0) == 0x80; k++) cp = cp << 6 | (u[k] & 0x3F);
+        if (k == n) { *len = n; return cp; }
+    }
+    *len = 1;
+    return u[0];
+}
+
+/* "&name;" or "&#123;"; returns the text it stands for and sets *consumed
+ * (0 if this is not an entity, then the '&' is literal). */
+static const char *entity(const char *p, int *consumed, char tmp[2])
+{
+    static const struct { const char *n; u32 cp; } ents[] = {
+        { "amp;", '&' }, { "lt;", '<' }, { "gt;", '>' }, { "quot;", '"' }, { "apos;", '\'' }, { "nbsp;", 0xA0 },
+        { "copy;", 0xA9 }, { "reg;", 0xAE }, { "trade;", 0x2122 }, { "mdash;", 0x2014 }, { "ndash;", 0x2013 },
+        { "hellip;", 0x2026 }, { "lsquo;", 0x2018 }, { "rsquo;", 0x2019 }, { "ldquo;", 0x201C }, { "rdquo;", 0x201D },
+        { "laquo;", 0xAB }, { "raquo;", 0xBB }, { "bull;", 0x2022 }, { "middot;", 0xB7 }, { "times;", 0xD7 },
+        { "divide;", 0xF7 }, { "deg;", 0xB0 }, { "plusmn;", 0xB1 }, { "euro;", 0x20AC }, { "pound;", 0xA3 },
+        { "yen;", 0xA5 }, { "cent;", 0xA2 }, { "sect;", 0xA7 }, { "para;", 0xB6 }, { "larr;", 0x2190 },
+        { "rarr;", 0x2192 }, { "uarr;", 0x2191 }, { "darr;", 0x2193 }, { "le;", 0x2264 }, { "ge;", 0x2265 },
+        { "ne;", 0x2260 }, { "szlig;", 0xDF }, { "shy;", 0xAD }, { "thinsp;", 0x2009 }, { "zwj;", 0x200D },
+        { "zwnj;", 0x200C }, { "frac12;", 0xBD },
     };
     for (unsigned i = 0; i < ARRAY_SIZE(ents); i++) {
         int l = strlen(ents[i].n);
-        if (!strncmp(p, ents[i].n, l)) { *consumed = l; return ents[i].c; }
+        if (!strncmp(p, ents[i].n, l)) { *consumed = l; return uni_ascii(ents[i].cp, tmp); }
     }
     if (p[0] == '#') {
-        int k = 1, v = 0;
+        int k = 1;
+        u32 v = 0;
         bool hex = p[1] == 'x' || p[1] == 'X';
         if (hex) k++;
-        while (isalnum(p[k]) && k < 8) { v = v * (hex ? 16 : 10) + (isdigit(p[k]) ? p[k] - '0' : (tolower(p[k]) - 'a' + 10)); k++; }
-        if (p[k] == ';') { *consumed = k + 1; return v < 128 && v >= 32 ? v : '?'; }
+        while (k < 10 && (hex ? isalnum(p[k]) : isdigit(p[k]))) {
+            v = v * (hex ? 16 : 10) + (isdigit(p[k]) ? p[k] - '0' : (tolower(p[k]) - 'a' + 10));
+            k++;
+        }
+        if (p[k] == ';' && k > (hex ? 2 : 1)) { *consumed = k + 1; return uni_ascii(v, tmp); }
+    }
+    /* accented letters: &eacute; &Uuml; &ccedil; &atilde; &aring; ... -> the letter */
+    if (isalpha(p[0])) {
+        static const char *marks[] = { "acute;", "grave;", "uml;", "circ;", "tilde;", "cedil;", "ring;", "slash;", "caron;" };
+        for (unsigned i = 0; i < ARRAY_SIZE(marks); i++) {
+            int l = strlen(marks[i]);
+            if (!strncmp(p + 1, marks[i], l)) { *consumed = 1 + l; tmp[0] = p[0]; tmp[1] = 0; return tmp; }
+        }
     }
     *consumed = 0;
-    return '&';
+    return "&";
 }
 
 static void parse_html(struct web *b, const char *h, bool plain)
@@ -139,9 +237,20 @@ static void parse_html(struct web *b, const char *h, bool plain)
             if (!strcmp(tag, "title") && !close) {
                 const char *te = strstr(e + 1, "</");
                 if (te) {
-                    int n = MIN((int)(te - e - 1), (int)sizeof b->title - 1);
-                    memcpy(b->title, e + 1, n);
-                    b->title[n] = 0;
+                    /* convert entities / UTF-8 the same way as body text */
+                    int o = 0;
+                    for (const char *t = e + 1; t < te && o < (int)sizeof b->title - 4;) {
+                        char tmp[2];
+                        const char *text;
+                        int n = 1;
+                        if (*t == '&') { text = entity(t + 1, &n, tmp); n++; }
+                        else if ((u8)*t >= 0x80) text = uni_ascii(utf8_decode(t, &n), tmp);
+                        else if ((u8)*t < 32) text = " ";
+                        else { tmp[0] = *t; tmp[1] = 0; text = tmp; }
+                        for (; *text && o < (int)sizeof b->title - 4; text++) b->title[o++] = *text;
+                        t += n;
+                    }
+                    b->title[o] = 0;
                     p = te;
                     continue;
                 }
@@ -170,12 +279,21 @@ static void parse_html(struct web *b, const char *h, bool plain)
         }
         if (skip) { p++; continue; }
         char c = *p;
-        if (c == '&' && !plain) { int n; c = (char)entity(p + 1, &n); p += n; }
         if (c == '\r') { p++; continue; }
         if ((style & ST_PRE) && c == '\n') { FLUSH(); add_item(b, IT_BREAK, 0, -1, NULL, 0); p++; continue; }
         if (c == ' ' || c == '\t' || c == '\n') { FLUSH(); p++; continue; }
-        if ((u8)c >= 32 && wl < 255) word[wl++] = (u8)c < 128 ? c : '?';
-        p++;
+        /* everything else becomes ASCII text: plain characters, entities, UTF-8 */
+        char tmp[2];
+        const char *text;
+        int n = 1;
+        if (c == '&' && !plain) { text = entity(p + 1, &n, tmp); n++; if (n == 1) text = "&"; }
+        else if ((u8)c >= 0x80) text = uni_ascii(utf8_decode(p, &n), tmp);
+        else { tmp[0] = c; tmp[1] = 0; text = (u8)c >= 32 ? tmp : ""; }
+        for (; *text; text++) {
+            if (*text == ' ') FLUSH();
+            else if (wl < 255) word[wl++] = *text;
+        }
+        p += n;
     }
     FLUSH();
 #undef FLUSH
@@ -265,13 +383,15 @@ static void paint(window_t *w)
 static const char *home_page =
     "<html><head><title>NimbusOS Web</title></head><body>"
     "<h1>Welcome to the NimbusOS Web Browser</h1>"
-    "<p>This is a simple text-mode browser for <b>http://</b> pages. It has no TLS, so https sites "
-    "cannot be opened. Type an address above and press Enter.</p>"
+    "<p>This is a simple text-mode browser for <b>http://</b> and <b>https://</b> pages. Secure pages "
+    "are encrypted with TLS 1.3, but NimbusOS does not check the site's certificate, so it cannot prove "
+    "who it is talking to. Type an address above and press Enter.</p>"
     "<h2>Try</h2><ul>"
     "<li><a href=\"http://10.0.2.2:8080/\">http://10.0.2.2:8080/</a> - a web server on your host computer "
     "(e.g. run <b>python3 -m http.server 8080</b>; QEMU's user network maps 10.0.2.2 to the host)</li>"
-    "<li><a href=\"http://example.com/\">http://example.com/</a></li>"
-    "<li><a href=\"http://neverssl.com/\">http://neverssl.com/</a></li>"
+    "<li><a href=\"http://info.cern.ch/\">http://info.cern.ch/</a> - the first website (1991)</li>"
+    "<li><a href=\"https://example.com/\">https://example.com/</a></li>"
+    "<li><a href=\"https://en.wikipedia.org/wiki/Operating_system\">https://en.wikipedia.org/wiki/Operating_system</a></li>"
     "</ul><p>The Terminal has <b>ping</b>, <b>nslookup</b>, <b>wget</b>, <b>http</b> and <b>ifconfig</b> too.</p>"
     "</body></html>";
 
@@ -303,14 +423,6 @@ static void navigate(window_t *w, const char *url, bool push)
         paint(w);
         return;
     }
-    if (!strncmp(u, "https://", 8)) {
-        doc_clear(b);
-        show_html(w, "<h1>Secure sites are not supported</h1><p>NimbusOS has no TLS, so https:// pages cannot be "
-                     "loaded. Try the http:// version of the site.</p>", false);
-        snprintf(b->status, sizeof b->status, "https is not supported");
-        paint(w);
-        return;
-    }
     if (b->job) { netjob_cancel(b->job); netjob_release(b->job); }
     b->job = netjob_fetch(u);
     snprintf(b->status, sizeof b->status, "Loading %s ...", u);
@@ -322,11 +434,12 @@ static void navigate(window_t *w, const char *url, bool push)
 static void resolve_link(struct web *b, const char *href, char *out, int max)
 {
     if (!strncmp(href, "http://", 7) || !strncmp(href, "https://", 8) || !strncmp(href, "about:", 6)) { strlcpy(out, href, max); return; }
-    if (!strncmp(href, "//", 2)) { snprintf(out, max, "http:%s", href); return; }
+    bool secure = !strncmp(b->url, "https://", 8);
+    if (!strncmp(href, "//", 2)) { snprintf(out, max, "%s:%s", secure ? "https" : "http", href); return; }
     /* base = scheme://host[:port] and the directory of the current path */
     char base[256];
     strlcpy(base, b->url, sizeof base);
-    char *host_end = strchr(base + 7, '/');
+    char *host_end = strchr(base + (secure ? 8 : 7), '/');
     if (href[0] == '/') { if (host_end) *host_end = 0; snprintf(out, max, "%s%s", base, href); return; }
     if (!host_end) strlcat(base, "/", sizeof base);
     else { char *last = strrchr(base, '/'); last[1] = 0; }
@@ -374,7 +487,11 @@ static void poll_job(window_t *w)
         b->addr.sel = b->addr.cursor;
         bool html = strstr(body, "<html") || strstr(body, "<HTML") || strstr(body, "<p") || strstr(body, "<body") || strstr(body, "<h1");
         show_html(w, body, !html);
-        snprintf(b->status, sizeof b->status, "Done - HTTP %d, %u bytes, %d links", status, len, b->nlinks);
+        if (!strncmp(b->url, "https://", 8))
+            snprintf(b->status, sizeof b->status, "Done - encrypted, certificate not verified - HTTP %d, %u bytes, %d links (%s)",
+                     status, len, b->nlinks, http_last_security());
+        else
+            snprintf(b->status, sizeof b->status, "Done - HTTP %d, %u bytes, %d links - not encrypted", status, len, b->nlinks);
         klog("[web ] loaded %s: HTTP %d, %u bytes, %d links, title \"%s\"\n", b->url, status, len, b->nlinks, b->title);
         kfree(body);
     }
