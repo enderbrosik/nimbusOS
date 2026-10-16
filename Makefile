@@ -172,6 +172,7 @@ test-all: test $(IMG)
 	python3 tools/test_stage5.py
 	python3 tools/test_stage6.py
 	python3 tools/test_stage7.py
+	python3 tools/test_games.py
 	python3 tools/test_iso.py
 
 clean:

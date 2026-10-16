@@ -20,7 +20,7 @@ with Qemu([IMG], name="stage5") as q:
     time.sleep(1)
     q.mouse_home()
     q.screenshot(f"{shots}/stage5-1-desktop.png")
-    assert re.search(r"\[desk\] 7 icons", q.serial()), "icons"
+    assert re.search(r"\[desk\] 10 icons", q.serial()), "icons"
 
     # 1. double-click the Notepad icon (column 0, row 1) -> window opens
     q.double_click(*icon_center(0, 1))

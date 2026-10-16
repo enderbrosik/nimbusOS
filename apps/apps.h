@@ -3,7 +3,8 @@
 #define NIMBUS_APPS_H
 #include "kernel/types.h"
 
-enum { APP_EXPLORER, APP_NOTEPAD, APP_PAINT, APP_TERMINAL, APP_TASKMGR, APP_INSTALLER, APP_COUNT };
+enum { APP_EXPLORER, APP_NOTEPAD, APP_PAINT, APP_TERMINAL, APP_TASKMGR, APP_INSTALLER,
+       APP_MINES, APP_SNAKE, APP_SOLITAIRE, APP_COUNT };
 
 struct app_def {
     const char *name;
@@ -23,5 +24,8 @@ void paint_open(const char *path);
 void terminal_open(const char *cwd);
 void taskmgr_open(const char *unused);
 void installer_open(const char *unused);
+void minesweeper_open(const char *arg);
+void snake_open(const char *arg);
+void solitaire_open(const char *arg);
 void sysprops_open(void);
 #endif

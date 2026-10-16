@@ -41,5 +41,5 @@ with Qemu([TARGET], name="iso-installed") as q:
     q.wait_serial(r"Desktop ready", timeout=60)
     log = q.serial()
     assert 'mounted "NIMBUS" from Primary Master' in log and "live CD" not in log
-    assert re.search(r"\[desk\] 6 icons", log)
+    assert re.search(r"\[desk\] 9 icons", log)
 print("iso: PASS")

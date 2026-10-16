@@ -13,6 +13,9 @@ const struct app_def g_apps[APP_COUNT] = {
     [APP_TERMINAL]  = { "Terminal", ICON_TERMINAL, terminal_open },
     [APP_TASKMGR]   = { "Task Manager", ICON_TASKMGR, taskmgr_open },
     [APP_INSTALLER] = { "Install NimbusOS", ICON_INSTALLER, installer_open },
+    [APP_MINES]     = { "Minesweeper", ICON_MINES, minesweeper_open },
+    [APP_SNAKE]     = { "Snake", ICON_SNAKE, snake_open },
+    [APP_SOLITAIRE] = { "Solitaire", ICON_CARDS, solitaire_open },
 };
 
 bool system_is_live(void) { return !vfs_exists("/System/installed.txt"); }

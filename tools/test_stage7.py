@@ -84,7 +84,7 @@ with Qemu([TARGET], name="stage7-installed") as q:
     q.wait_serial(r"Desktop ready", timeout=40)
     log = q.serial()
     assert 'mounted "NIMBUS" from Primary Master' in log
-    assert re.search(r"\[desk\] 6 icons", log), "installer icon should be gone on the installed system"
+    assert re.search(r"\[desk\] 9 icons", log), "installer icon should be gone on the installed system"
     time.sleep(1)
     q.screenshot(f"{S}/stage7-6-installed-desktop.png")
 print("stage7: PASS")

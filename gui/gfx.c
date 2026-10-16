@@ -310,3 +310,15 @@ void gfx_text_centered(surface_t *s, rect_t r, const char *str, u32 fg)
     int w = gfx_text_width(str);
     gfx_text(s, r.x + (r.w - w) / 2, r.y + (r.h - FONT_H) / 2, str, fg, COLOR_NONE);
 }
+
+int gfx_text_scaled(surface_t *s, int x, int y, const char *str, int scale, u32 fg)
+{
+    int x0 = x;
+    for (; *str; str++, x += FONT_W * scale) {
+        const u8 *g = font + (u8)*str * 16;
+        for (int j = 0; j < FONT_H; j++)
+            for (int i = 0; i < FONT_W; i++)
+                if (g[j] & (0x80 >> i)) gfx_fill_rect(s, x + i * scale, y + j * scale, scale, scale, fg);
+    }
+    return x - x0;
+}

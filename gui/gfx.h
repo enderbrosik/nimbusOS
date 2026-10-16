@@ -60,6 +60,8 @@ int  gfx_text(surface_t *s, int x, int y, const char *str, u32 fg, u32 bg);
 int  gfx_text_n(surface_t *s, int x, int y, const char *str, int n, u32 fg, u32 bg);
 int  gfx_text_bold(surface_t *s, int x, int y, const char *str, u32 fg);
 int  gfx_text_width(const char *str);
+/* text magnified by an integer factor (big digits, card pips) */
+int  gfx_text_scaled(surface_t *s, int x, int y, const char *str, int scale, u32 fg);
 /* draws text clipped to max_w pixels, adding "..." if it does not fit */
 void gfx_text_ellipsis(surface_t *s, int x, int y, const char *str, int max_w, u32 fg);
 void gfx_text_centered(surface_t *s, rect_t r, const char *str, u32 fg);

@@ -147,6 +147,31 @@ static void draw_icon(surface_t *s, int id)
         gfx_fill_circle(s, 16, 16, 10, RGB(110, 116, 130));
         gfx_fill_circle(s, 16, 16, 4, KEY);
         break;
+    case ICON_MINES:
+        gfx_fill_circle(s, 15, 17, 10, RGB(30, 30, 36));
+        for (int a = 0; a < 4; a++) {
+            static const int dx[4] = { 0, 13, 9, 9 }, dy[4] = { 13, 0, 9, -9 };
+            gfx_line(s, 15 - dx[a], 17 - dy[a], 15 + dx[a], 17 + dy[a], RGB(30, 30, 36));
+        }
+        gfx_fill_rect(s, 10, 12, 4, 4, 0xFFFFFF);
+        gfx_line(s, 22, 6, 27, 1, RGB(200, 120, 40));
+        gfx_fill_circle(s, 27, 2, 1, RGB(255, 200, 40));
+        break;
+    case ICON_SNAKE:
+        gfx_round_rect(s, 1, 1, 30, 30, 4, RGB(20, 40, 24));
+        for (int i = 0; i < 5; i++) gfx_fill_rect(s, 5 + i * 4, 20, 4, 4, RGB(90, 220, 90));
+        for (int i = 0; i < 3; i++) gfx_fill_rect(s, 21, 16 - i * 4, 4, 4, RGB(90, 220, 90));
+        gfx_fill_rect(s, 21, 8, 4, 4, RGB(160, 255, 140));
+        gfx_fill_circle(s, 9, 9, 2, RGB(240, 60, 60));
+        break;
+    case ICON_CARDS:
+        gfx_round_rect(s, 3, 6, 18, 24, 2, RGB(90, 90, 100));
+        gfx_round_rect(s, 4, 7, 16, 22, 2, 0xFFFFFF);
+        gfx_round_rect(s, 11, 2, 18, 24, 2, RGB(90, 90, 100));
+        gfx_round_rect(s, 12, 3, 16, 22, 2, 0xFFFFFF);
+        gfx_text_scaled(s, 15, 6, "\x03", 2, RGB(210, 30, 40));
+        gfx_char(s, 6, 12, 6, RGB(20, 20, 20), COLOR_NONE);
+        break;
     case ICON_INFO:
     case ICON_WARNING:
     case ICON_ERROR: {
