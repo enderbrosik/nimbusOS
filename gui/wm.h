@@ -95,7 +95,10 @@ bool      wm_window_alive(window_t *w);
 /* screen / cursor */
 int       wm_mouse_x(void);
 int       wm_mouse_y(void);
-enum { CURSOR_ARROW, CURSOR_TEXT, CURSOR_RESIZE_H, CURSOR_RESIZE_V, CURSOR_RESIZE_NWSE, CURSOR_RESIZE_NESW, CURSOR_CROSS };
+enum { CURSOR_ARROW, CURSOR_TEXT, CURSOR_RESIZE_H, CURSOR_RESIZE_V, CURSOR_RESIZE_NWSE, CURSOR_RESIZE_NESW, CURSOR_CROSS,
+       CURSOR_DOT, CURSOR_RING, CURSOR_PLUS };       /* the last three are pointer styles */
+/* Pointer look (Settings > Cursor): style 0 arrow, 1 dot, 2 ring, 3 plus; scale 1..3; fill colour. */
+void wm_set_cursor_look(int style, int scale, u32 fill);
 void      wm_set_app_cursor(int cursor);          /* cursor while hovering a client */
 bool      wm_set_resolution(int w, int h);        /* live mode switch */
 void      wm_set_ui_scale(int pct);             /* 50..200, saved by Settings */

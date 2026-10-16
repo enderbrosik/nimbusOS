@@ -28,9 +28,9 @@
 #define NAV_W 150
 #define ROW 26
 
-enum { PG_DISPLAY, PG_APPEARANCE, PG_MOUSE, PG_SOUND, PG_NETWORK, PG_TIME, NPAGES };
-static const char *page_names[NPAGES] = { "Display", "Appearance", "Mouse", "Sound", "Network", "Date & Time" };
-static const int page_icons[NPAGES] = { ICON_COMPUTER, ICON_WALLPAPER, ICON_SETTINGS, ICON_AUDIO, ICON_NETWORK, ICON_INFO };
+enum { PG_DISPLAY, PG_APPEARANCE, PG_MOUSE, PG_SOUND, PG_NETWORK, PG_TIME, PG_CURSOR, NPAGES };
+static const char *page_names[NPAGES] = { "Display", "Appearance", "Mouse", "Sound", "Network", "Date & Time", "Cursor" };
+static const int page_icons[NPAGES] = { ICON_COMPUTER, ICON_WALLPAPER, ICON_SETTINGS, ICON_AUDIO, ICON_NETWORK, ICON_INFO, ICON_SETTINGS };
 
 /* Resolutions, smallest first. The name is shown as "1920 x 1080  (1080p, 16:9)". */
 static const struct { int w, h; const char *name, *ratio; } modes[] = {
@@ -48,6 +48,8 @@ static const u32 accents[8] = {
     RGB(0, 120, 215), RGB(16, 124, 16), RGB(194, 57, 52), RGB(135, 100, 184),
     RGB(202, 80, 16), RGB(0, 153, 188), RGB(232, 17, 123), RGB(76, 74, 72),
 };
+static const char *pointer_names[4] = { "Arrow", "Dot", "Ring", "Plus" };
+static const u32 pointer_fills[6] = { 0xFFFFFF, 0xFFE27A, 0x7FE8FF, 0x9CFF8A, 0xFF9CC8, 0xFFB347 };
 static const int ui_scales[6] = { 75, 100, 125, 150, 175, 200 };
 static const char *scale_names[6] = { "75%", "100%", "125%", "150%", "175%", "200%" };
 static const int speeds[5] = { 2, 3, 4, 6, 8 };
@@ -142,6 +144,32 @@ static void paint(window_t *w)
             ui_button(s, r, scale_names[i], ui_scales[i] == wm_ui_scale() ? BTN_DEFAULT : BTN_NORMAL);
         }
         gfx_ui_text(s, c.x, c.y + 336, "Makes windows, text and icons bigger or smaller.", C_TEXT_DIM);
+        break;
+    }
+    case PG_CURSOR: {
+        heading(s, c, "Pointer style");
+        int style = settings_get_int("cursor_style", 0);
+        for (int i = 0; i < 4; i++) {
+            ui_radio(s, c.x, c.y + 34 + i * ROW, style == i, NULL);
+            gfx_ui_text(s, c.x + 22, c.y + 34 + i * ROW, pointer_names[i], C_TEXT);
+        }
+        heading(s, rect_make(c.x, c.y + 150, c.w, 0), "Size");
+        int scale = settings_get_int("cursor_scale", 1);
+        for (int i = 0; i < 3; i++) {
+            ui_radio(s, c.x, c.y + 184 + i * ROW, scale == i + 1, NULL);
+            char sz[8];
+            snprintf(sz, sizeof sz, "%dx", i + 1);
+            gfx_ui_text(s, c.x + 22, c.y + 184 + i * ROW, sz, C_TEXT);
+        }
+        heading(s, rect_make(c.x, c.y + 270, c.w, 0), "Colour");
+        u32 fill = (u32)settings_get_int("cursor_fill", 0xFFFFFF);
+        for (int i = 0; i < 6; i++) {
+            rect_t r = rect_make(c.x + i * 44, c.y + 304, 36, 36);
+            gfx_round_rect(s, r.x, r.y, r.w, r.h, 6, pointer_fills[i]);
+            gfx_rect(s, r.x, r.y, r.w, r.h, 0x202020);
+            if (pointer_fills[i] == fill) gfx_rect(s, r.x - 3, r.y - 3, r.w + 6, r.h + 6, C_TEXT);
+        }
+        gfx_ui_text(s, c.x, c.y + 352, "Pointer changes apply straight away.", C_TEXT_DIM);
         break;
     }
     case PG_MOUSE: {
@@ -351,6 +379,22 @@ static void on_event(window_t *w, event_t *e)
                 e->x < c.x + 360 && fb_mode_supported(modes[i].w, modes[i].h)) a->sel_mode = i;
             if (rect_contains(a->apply_btn, e->x, e->y)) { apply_mode(w); return; }
             break;
+        }
+        case PG_CURSOR: {
+            int style = settings_get_int("cursor_style", 0), scale = settings_get_int("cursor_scale", 1);
+            u32 fill = (u32)settings_get_int("cursor_fill", 0xFFFFFF);
+            for (int i = 0; i < 4; i++)
+                if (rect_contains(rect_make(c.x, c.y + 34 + i * ROW, 200, 22), e->x, e->y)) style = i;
+            for (int i = 0; i < 3; i++)
+                if (rect_contains(rect_make(c.x, c.y + 184 + i * ROW, 200, 22), e->x, e->y)) scale = i + 1;
+            for (int i = 0; i < 6; i++)
+                if (rect_contains(rect_make(c.x + i * 44, c.y + 304, 36, 36), e->x, e->y)) fill = pointer_fills[i];
+            settings_set_int("cursor_style", style);
+            settings_set_int("cursor_scale", scale);
+            settings_set_int("cursor_fill", (int)fill);
+            wm_set_cursor_look(style, scale, fill);
+            paint(w);
+            return;
         }
         case PG_APPEARANCE:
             for (int i = 0; i < (int)ARRAY_SIZE(ui_scales); i++)

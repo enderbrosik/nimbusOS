@@ -76,7 +76,10 @@ static window_t *hover_win;
 static int app_cursor = CURSOR_ARROW, cur_cursor = CURSOR_ARROW;
 static int cursor_x = -100, cursor_y = -100, cursor_drawn_shape;
 static bool cursor_visible;
-static u32 cursor_save[32 * 32];
+#define CSAVE 72                          /* largest cursor (24 px) at 3x */
+static u32 cursor_save[CSAVE * CSAVE];
+static int ptr_style, cur_scale = 1;
+static u32 cur_fill = 0xFFFFFF;
 static rect_t cursor_saved_rect;
 
 enum { HT_NONE, HT_CLIENT, HT_TITLE, HT_FRAME, HT_BTN_CLOSE, HT_BTN_MAX, HT_BTN_MIN, HT_RESIZE };
@@ -115,16 +118,33 @@ static const struct cursor_def cursors[] = {
         "........XXXXXXX", "........X#####X", ".........X####X", "........X#X###X", ".......X#X.X##X",
         "......X#X...X#X", ".....X#X.....XX", ".....X#X.......", "X.....X#X......", "XX...X#X.......",
         "X#X.X#X........", "X##X#X.........", ".X####X........", "X#####X........", "XXXXXXX........" } },
+    [CURSOR_DOT] = { 9, 9, 4, 4, {
+        "..XXXXX..", ".X#####X.", "X#######X", "X#######X", "X#######X", "X#######X", "X#######X", ".X#####X.", "..XXXXX.." } },
+    [CURSOR_RING] = { 11, 11, 5, 5, {
+        "...XXXXX...", "..X#####X..", ".X#XXXXX#X.", "X#X.....X#X", "X#X.....X#X", "X#X.....X#X", "X#X.....X#X",
+        "X#X.....X#X", ".X#XXXXX#X.", "..X#####X..", "...XXXXX..." } },
+    [CURSOR_PLUS] = { 11, 11, 5, 5, {
+        "....XXX....", "....X#X....", "....X#X....", "....X#X....", "XXXX###XXXX", "X#########X",
+        "XXXX###XXXX", "....X#X....", "....X#X....", "....X#X....", "....XXX...." } },
     [CURSOR_CROSS] = { 15, 15, 7, 7, {
         "......XXX......", "......X#X......", "......X#X......", "......X#X......", "......X#X......",
         "......X#X......", "XXXXXXX#XXXXXXX", "X######.######X", "XXXXXXX#XXXXXXX", "......X#X......",
         "......X#X......", "......X#X......", "......X#X......", "......X#X......", "......XXX......" } },
 };
 
+/* The shape drawn for the current pointer (arrow is replaced by the chosen style). */
+static int pointer_shape(void)
+{
+    if (cur_cursor != CURSOR_ARROW) return cur_cursor;
+    static const int styles[4] = { CURSOR_ARROW, CURSOR_DOT, CURSOR_RING, CURSOR_PLUS };
+    return styles[ptr_style & 3];
+}
+
 static rect_t cursor_rect(int shape, int x, int y)
 {
     const struct cursor_def *c = &cursors[shape];
-    return rect_intersect(rect_make(x - c->hx, y - c->hy, c->w, c->h), rect_make(0, 0, screen.w, screen.h));
+    return rect_intersect(rect_make(x - c->hx * cur_scale, y - c->hy * cur_scale, c->w * cur_scale, c->h * cur_scale),
+                          rect_make(0, 0, screen.w, screen.h));
 }
 
 static void cursor_hide(void)
@@ -132,26 +152,28 @@ static void cursor_hide(void)
     if (!cursor_visible) return;
     rect_t r = cursor_saved_rect;
     for (int j = 0; j < r.h; j++)
-        memcpy(screen.px + (r.y + j) * screen.pitch + r.x, cursor_save + j * 32, r.w * 4);
+        memcpy(screen.px + (r.y + j) * screen.pitch + r.x, cursor_save + j * CSAVE, r.w * 4);
     cursor_visible = false;
 }
 
 static void cursor_show(void)
 {
-    const struct cursor_def *c = &cursors[cur_cursor];
+    int shape = pointer_shape();
+    const struct cursor_def *c = &cursors[shape];
     int px = mx * phys_w / SCREEN_W, py = my * phys_h / SCREEN_H;
-    rect_t r = cursor_rect(cur_cursor, px, py);
+    rect_t r = cursor_rect(shape, px, py);
     for (int j = 0; j < r.h; j++)            /* save what is underneath */
-        memcpy(cursor_save + j * 32, screen.px + (r.y + j) * screen.pitch + r.x, r.w * 4);
+        memcpy(cursor_save + j * CSAVE, screen.px + (r.y + j) * screen.pitch + r.x, r.w * 4);
     cursor_saved_rect = r;
-    int ox = px - c->hx, oy = py - c->hy;
-    for (int j = 0; j < c->h; j++)
-        for (int i = 0; i < c->w; i++) {
-            char ch = c->rows[j][i];
+    int s = cur_scale;
+    int ox = px - c->hx * s, oy = py - c->hy * s;
+    for (int j = 0; j < c->h * s; j++)
+        for (int i = 0; i < c->w * s; i++) {
+            char ch = c->rows[j / s][i / s];
             int x = ox + i, y = oy + j;
             if (x < 0 || y < 0 || x >= screen.w || y >= screen.h) continue;
             if (ch == 'X') screen.px[y * screen.pitch + x] = 0x000000;
-            else if (ch == '#') screen.px[y * screen.pitch + x] = 0xFFFFFF;
+            else if (ch == '#') screen.px[y * screen.pitch + x] = cur_fill;
         }
     cursor_x = mx; cursor_y = my; cursor_drawn_shape = cur_cursor;
     cursor_visible = true;
@@ -1040,6 +1062,16 @@ void wm_set_ui_scale(int pct)
 
 int wm_ui_scale(void) { return ui_pct; }
 
+void wm_set_cursor_look(int style, int scale, u32 fill)
+{
+    cursor_hide();
+    ptr_style = style & 3;
+    cur_scale = scale < 1 ? 1 : scale > 3 ? 3 : scale;
+    cur_fill = fill;
+    cursor_drawn_shape = -1;                /* make the next frame redraw the pointer */
+    cursor_x = -100;
+}
+
 void wm_init(void)
 {
     surface_wrap(&screen, g_fb.pixels, g_fb.width, g_fb.height, g_fb.pitch);
@@ -1053,6 +1085,8 @@ void wm_init(void)
     mouse_get(&x, &y, &b);
     mx = x; my = y;
     mouse_set_speed(settings_get_int("mouse_speed", 4));
+    wm_set_cursor_look(settings_get_int("cursor_style", 0), settings_get_int("cursor_scale", 1),
+                       (u32)settings_get_int("cursor_fill", 0xFFFFFF));
     g_ui_smooth = settings_get_int("smooth_fonts", 1);
     g_dblclick_ms = settings_get_int("dblclick_ms", 450);
     icons_init();
