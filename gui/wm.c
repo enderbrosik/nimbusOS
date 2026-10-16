@@ -33,10 +33,12 @@
 #include "kernel/kprintf.h"
 #include "kernel/task.h"
 #include "kernel/panic.h"
+#include "kernel/settings.h"
+#include "fs/nbfs.h"
 
 #define MAX_WINDOWS 48
 #define MAX_DIRTY 48
-#define DBLCLICK_MS 450
+int g_dblclick_ms = 450;
 
 static window_t *zorder[MAX_WINDOWS];
 static int nwin;
@@ -50,7 +52,10 @@ static int cascade;
 /* mouse state */
 static int mx, my;
 static u8 mbuttons;
-enum { DRAG_NONE, DRAG_MOVE, DRAG_RESIZE, DRAG_CAPTURE, DRAG_TITLE_BTN, DRAG_DESKTOP, DRAG_TASKBAR };
+enum { DRAG_NONE, DRAG_MOVE, DRAG_RESIZE, DRAG_CAPTURE, DRAG_TITLE_BTN, DRAG_DESKTOP, DRAG_TASKBAR, DRAG_DND };
+static char dnd_path[NBFS_PATH_MAX];
+static int dnd_icon;
+
 static int drag_mode;
 static window_t *drag_win;
 static int drag_dx, drag_dy, drag_edges, drag_btn, press_x, press_y;
@@ -260,9 +265,18 @@ static void draw_window(surface_t *s, window_t *w)
     int text_max = (rect_empty(minb) ? closeb.x : minb.x) - (f.x + 30) - 4;
     rect_t old = s->clip;
     gfx_set_clip(s, rect_intersect(old, rect_make(f.x + 28, f.y, text_max + 2, TITLE_H + 2)));
-    gfx_text_ellipsis(s, f.x + 29, f.y + BORDER + (TITLE_H - 16) / 2 + 1, w->title, text_max, 0x000000);
-    gfx_text_ellipsis(s, f.x + 28, f.y + BORDER + (TITLE_H - 16) / 2, w->title, text_max, 0xFFFFFF);
-    gfx_text_ellipsis(s, f.x + 29, f.y + BORDER + (TITLE_H - 16) / 2, w->title, text_max, 0xFFFFFF);
+    int ty = f.y + BORDER + (TITLE_H - 16) / 2;
+    gfx_set_clip(s, rect_intersect(s->clip, rect_make(f.x + 28, f.y, text_max + 2, TITLE_H + 2)));
+    char t[80];
+    strlcpy(t, w->title, sizeof t);
+    /* bold title with a soft shadow; ellipsize to the space left of the buttons */
+    if (gfx_ui_width(t) + 1 > text_max) {
+        int n = strlen(t);
+        while (n > 0 && gfx_ui_width_n(t, n) + gfx_ui_width("...") + 1 > text_max) n--;
+        strcpy(t + n, "...");
+    }
+    gfx_ui_text_bold(s, f.x + 29, ty + 1, t, active ? color_darken(C_TITLE_ACTIVE_1, 80) : RGB(90, 94, 104));
+    gfx_ui_text_bold(s, f.x + 28, ty, t, 0xFFFFFF);
     s->clip = old;
     draw_title_btn(s, w, HT_BTN_MIN, active);
     draw_title_btn(s, w, HT_BTN_MAX, active);
@@ -281,6 +295,16 @@ static void compose(rect_t r)
         if (rect_overlaps(window_bounds(w), r)) draw_window(back, w);
     }
     desktop_draw_overlay(back);
+    if (drag_mode == DRAG_DND) {
+        /* ghost: icon + name, translucent, beside the cursor */
+        const char *name = nbfs_path_basename(dnd_path);
+        int gx = mx + 10, gy = my + 12, gw = gfx_ui_width(name) + 44;
+        if (rect_overlaps(rect_make(gx, gy, gw, 36), r)) {
+            gfx_blend_rect(back, gx, gy, gw, 36, C_SELECT, 110);
+            icon_draw(back, dnd_icon, gx + 2, gy + 2);
+            gfx_ui_text(back, gx + 38, gy + 10, name, 0xFFFFFF);
+        }
+    }
     taskbar_draw(back);
     menu_draw(back);
     gfx_reset_clip(back);
@@ -612,9 +636,54 @@ static void set_hover_btn(window_t *w, int part)
 /* ---------------------------------------------------------------------
  * mouse handling
  * ------------------------------------------------------------------- */
+static rect_t dnd_rect(void)
+{
+    return rect_make(mx + 10, my + 12, gfx_ui_width(nbfs_path_basename(dnd_path)) + 46, 38);
+}
+static rect_t last_dnd;
+
+void wm_begin_dnd(const char *path, int icon)
+{
+    strlcpy(dnd_path, path, sizeof dnd_path);
+    dnd_icon = icon;
+    drag_mode = DRAG_DND;
+    last_dnd = dnd_rect();
+    wm_damage(last_dnd);
+    klog("[wm  ] drag started: %s\n", path);
+}
+
+window_t *wm_window_under(int x, int y)
+{
+    int part = HT_NONE, edges;
+    if (rect_contains(taskbar_rect(), x, y)) return NULL;
+    return window_at(x, y, &part, &edges);
+}
+
+void wm_send_drop(window_t *w, const char *path, int sx, int sy, bool copy)
+{
+    if (!wm_window_alive(w)) return;
+    if (w->modal && wm_window_alive(w->modal)) return;
+    event_t e;
+    memset(&e, 0, sizeof e);
+    rect_t c = wm_client_rect(w);
+    e.type = EV_DROP;
+    e.x = sx - c.x;
+    e.y = sy - c.y;
+    e.path = path;
+    e.copy = copy;
+    klog("[wm  ] drop %s on \"%s\"%s\n", path, w->title, copy ? " (copy)" : "");
+    wm_focus(w);
+    send(w, &e);
+}
+
 static void on_motion(void)
 {
     switch (drag_mode) {
+    case DRAG_DND:
+        wm_damage(last_dnd);
+        last_dnd = dnd_rect();
+        wm_damage(last_dnd);
+        return;
     case DRAG_MOVE: {
         int nx = mx - drag_dx, ny = my - drag_dy;
         if (ny < 0) ny = 0;
@@ -668,7 +737,7 @@ static void on_motion(void)
 static void on_press(int button)
 {
     u64 now = timer_ticks();
-    bool dbl = button == last_click_btn && now - last_click_t < DBLCLICK_MS &&
+    bool dbl = button == last_click_btn && now - last_click_t < (u64)g_dblclick_ms &&
                ABS(mx - last_click_x) <= 4 && ABS(my - last_click_y) <= 4;
     last_click_t = dbl ? 0 : now;
     last_click_x = mx; last_click_y = my; last_click_btn = button;
@@ -726,6 +795,16 @@ static void on_release(int button)
         return;
     }
     switch (drag_mode) {
+    case DRAG_DND: {
+        if (button != MOUSE_LEFT) break;
+        wm_damage(last_dnd);
+        drag_mode = DRAG_NONE;
+        bool copy = keyboard_mods() & MOD_CTRL;
+        window_t *w = wm_window_under(mx, my);
+        if (w) wm_send_drop(w, dnd_path, mx, my, copy);
+        else if (!rect_contains(taskbar_rect(), mx, my)) desktop_drop(dnd_path, mx, my, copy);
+        break;
+    }
     case DRAG_CAPTURE:
         if (wm_window_alive(drag_win)) mouse_event_to(drag_win, EV_MOUSE_UP, button);
         if (!mbuttons) drag_mode = DRAG_NONE;
@@ -769,6 +848,22 @@ static void handle_mouse(struct mouse_event *me)
     mx = me->x; my = me->y;
     mbuttons = me->buttons;
     if (moved) on_motion();
+    if (me->wheel && !menu_is_open()) {
+        int edges, part = HT_NONE;
+        window_t *w = drag_mode == DRAG_CAPTURE && wm_window_alive(drag_win) ? drag_win : window_at(mx, my, &part, &edges);
+        if (w && !(w->modal && wm_window_alive(w->modal))) {
+            event_t e;
+            memset(&e, 0, sizeof e);
+            rect_t c = wm_client_rect(w);
+            e.type = EV_WHEEL;
+            e.x = mx - c.x; e.y = my - c.y;
+            e.wheel = me->wheel;
+            e.buttons = mbuttons;
+            e.key.mods = keyboard_mods();
+            klog("[wm  ] wheel %d -> \"%s\"\n", me->wheel, w->title);
+            send(w, &e);
+        }
+    }
     u8 pressed = me->buttons & ~old, released = old & ~me->buttons;
     static const int order[3] = { MOUSE_LEFT, MOUSE_RIGHT, MOUSE_MIDDLE };
     for (int i = 0; i < 3; i++) {
@@ -798,6 +893,12 @@ static void handle_key(struct key_event *ke)
     if (ke->pressed && (ke->key == KEY_LWIN || ke->key == KEY_RWIN)) { taskbar_toggle_start(); return; }
     if (ke->pressed && (ke->mods & MOD_CTRL) && ke->key == KEY_ESC) { taskbar_toggle_start(); return; }
     if (menu_is_open()) { menu_key(ke); return; }
+    if (drag_mode == DRAG_DND && ke->pressed && ke->key == KEY_ESC) {
+        wm_damage(last_dnd);
+        drag_mode = DRAG_NONE;
+        klog("[wm  ] drag cancelled\n");
+        return;
+    }
     if (ke->pressed && (ke->mods & MOD_ALT) && ke->key == KEY_TAB) { alt_tab(); return; }
     if (ke->pressed && (ke->mods & MOD_ALT) && ke->key == KEY_F4) {
         if (focused) wm_close(focused);
@@ -831,6 +932,55 @@ static void run_timers(void)
     desktop_tick();
 }
 
+void wm_repaint_all(void)
+{
+    for (int i = 0; i < nwin; i++) if (!zorder[i]->destroyed) send_simple(zorder[i], EV_PAINT);
+    wm_damage(rect_make(0, 0, SCREEN_W, SCREEN_H));
+}
+
+bool wm_set_resolution(int w, int h)
+{
+    int ow = SCREEN_W, oh = SCREEN_H;
+    if (w == ow && h == oh) return true;
+    if (!fb_set_mode(w, h)) return false;
+    surface_t *nb = surface_create(w, h);
+    if (!nb) { fb_set_mode(ow, oh); return false; }
+    surface_destroy(back);
+    back = nb;
+    SCREEN_W = w;
+    SCREEN_H = h;
+    surface_wrap(&screen, g_fb.pixels, g_fb.width, g_fb.height, g_fb.pitch);
+    cursor_visible = false;                 /* the saved pixels are stale */
+    menu_close();
+    ndirty = 0;
+    mouse_set_bounds(w, h);
+    int x, y;
+    u8 b;
+    mouse_get(&x, &y, &b);
+    mx = x; my = y;
+    /* keep every window reachable: refit maximized ones, pull others back on screen */
+    for (int i = 0; i < nwin; i++) {
+        window_t *win = zorder[i];
+        if (win->destroyed) continue;
+        if (win->maximized) { wm_set_frame(win, rect_make(0, 0, w, h - TASKBAR_H)); continue; }
+        rect_t f = win->frame;
+        if (f.w > w) f.w = w;
+        if (f.h > h - TASKBAR_H) f.h = h - TASKBAR_H;
+        if (f.x + f.w > w) f.x = w - f.w;
+        if (f.y + f.h > h - TASKBAR_H) f.y = h - TASKBAR_H - f.h;
+        if (f.x < 0) f.x = 0;
+        if (f.y < 0) f.y = 0;
+        wm_set_frame(win, f);
+        if (!win->maximized) win->restore = win->frame;
+    }
+    taskbar_init();
+    desktop_screen_changed();
+    ndirty = 0;
+    wm_damage(rect_make(0, 0, w, h));
+    klog("[wm  ] resolution changed to %dx%d\n", w, h);
+    return true;
+}
+
 void wm_init(void)
 {
     surface_wrap(&screen, g_fb.pixels, g_fb.width, g_fb.height, g_fb.pitch);
@@ -841,6 +991,9 @@ void wm_init(void)
     u8 b;
     mouse_get(&x, &y, &b);
     mx = x; my = y;
+    mouse_set_speed(settings_get_int("mouse_speed", 4));
+    g_ui_smooth = settings_get_int("smooth_fonts", 1);
+    g_dblclick_ms = settings_get_int("dblclick_ms", 450);
     icons_init();
     desktop_init();
     taskbar_init();

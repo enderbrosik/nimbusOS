@@ -17,6 +17,8 @@
 #include "kernel/selftest.h"
 #include "kernel/power.h"
 #include "gui/wm.h"
+#include "gui/theme.h"
+#include "kernel/settings.h"
 #include "drivers/ps2.h"
 #include "drivers/keyboard.h"
 #include "drivers/mouse.h"
@@ -120,7 +122,16 @@ void kmain(struct bootinfo *bi)
     kprintf("Drivers OK.\n");
 
     /* ---- Stage 5: desktop ---- */
-    if (!fb_init(1024, 768)) panic("no linear framebuffer (run QEMU with -vga std)");
+    settings_load();
+    int rw = 1024, rh = 768;
+    const char *res = settings_get("resolution", "1024x768");
+    char *x;
+    rw = (int)strtol(res, &x, 10);
+    if (*x == 'x') rh = (int)strtol(x + 1, NULL, 10);
+    if (!fb_init(rw, rh)) panic("no linear framebuffer (run QEMU with -vga std)");
+    g_screen_w = g_fb.width;
+    g_screen_h = g_fb.height;
+    theme_set_accent((u32)settings_get_int("accent", ACCENT_DEFAULT));
     panic_display_hook = gui_panic_screen;
     task_create_ex("desktop", gui_task, NULL, 256 * 1024);
     task_create("sysmon", sysmon_task, NULL);

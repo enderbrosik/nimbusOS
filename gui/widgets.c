@@ -18,7 +18,7 @@ void ui_button(surface_t *s, rect_t r, const char *label, int state)
     int off = state == BTN_PRESSED ? 1 : 0;
     rect_t t = r;
     t.x += off; t.y += off;
-    gfx_text_centered(s, t, label, fg);
+    gfx_ui_centered(s, t, label, fg);
 }
 
 void ui_icon_button(surface_t *s, rect_t r, int icon, const char *label, int state)
@@ -31,8 +31,8 @@ void ui_icon_button(surface_t *s, rect_t r, int icon, const char *label, int sta
     int x = r.x + 6;
     if (icon >= 0) { icon_draw_small(s, icon, x, r.y + (r.h - 16) / 2); x += 20; }
     if (label) {
-        if (icon < 0) x = r.x + (r.w - gfx_text_width(label)) / 2;
-        gfx_text(s, x, r.y + (r.h - 16) / 2, label, fg, COLOR_NONE);
+        if (icon < 0) x = r.x + (r.w - gfx_ui_width(label)) / 2;
+        gfx_ui_text(s, x, r.y + (r.h - 16) / 2, label, fg);
     }
 }
 
@@ -52,7 +52,7 @@ void ui_checkbox(surface_t *s, int x, int y, bool checked, const char *label)
             gfx_line(s, x + 5, y + 10 + i, x + 10, y + 5 + i, C_SELECT);
         }
     }
-    if (label) gfx_text(s, x + 20, y, label, C_TEXT, COLOR_NONE);
+    if (label) gfx_ui_text(s, x + 20, y, label, C_TEXT);
 }
 
 void ui_radio(surface_t *s, int x, int y, bool checked, const char *label)
@@ -60,7 +60,7 @@ void ui_radio(surface_t *s, int x, int y, bool checked, const char *label)
     gfx_fill_circle(s, x + 6, y + 8, 6, RGB(60, 60, 70));
     gfx_fill_circle(s, x + 6, y + 8, 5, 0xFFFFFF);
     if (checked) gfx_fill_circle(s, x + 6, y + 8, 3, C_SELECT);
-    if (label) gfx_text(s, x + 20, y, label, C_TEXT, COLOR_NONE);
+    if (label) gfx_ui_text(s, x + 20, y, label, C_TEXT);
 }
 
 void ui_progress(surface_t *s, rect_t r, int pct)
@@ -111,18 +111,25 @@ int ui_vscroll_offset_for(rect_t r, int total, int visible, int thumb_y)
     return off;
 }
 
-/* word-wrap helper; returns number of lines, draws if s != NULL */
+/* word-wrap helper (UI font, by pixel width); returns the number of lines
+ * and draws them when s != NULL */
 static int wrap(surface_t *s, rect_t r, const char *text, u32 fg)
 {
-    int cols = r.w / FONT_W, line = 0;
-    if (cols < 1) cols = 1;
+    int line = 0;
     const char *p = text;
     while (*p) {
         int n = 0, last_space = -1;
-        while (p[n] && p[n] != '\n' && n < cols) { if (p[n] == ' ') last_space = n; n++; }
+        while (p[n] && p[n] != '\n' && gfx_ui_width_n(p, n + 1) <= r.w) { if (p[n] == ' ') last_space = n; n++; }
+        if (n == 0 && *p != '\n') n = 1;
         int take = n;
         if (p[n] && p[n] != '\n' && last_space > 0) take = last_space;
-        if (s) gfx_text_n(s, r.x, r.y + line * (FONT_H + 2), p, take, fg, COLOR_NONE);
+        if (s) {
+            char buf[256];
+            int t = MIN(take, 255);
+            memcpy(buf, p, t);
+            buf[t] = 0;
+            gfx_ui_text(s, r.x, r.y + line * (FONT_H + 2), buf, fg);
+        }
         line++;
         p += take;
         if (*p == ' ' || *p == '\n') p++;

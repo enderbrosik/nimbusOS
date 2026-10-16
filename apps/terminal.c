@@ -573,6 +573,10 @@ static void on_event(window_t *w, event_t *ev)
     case EV_RESIZE: t->cols = term_cols(w); break;
     case EV_FOCUS: case EV_BLUR: paint(w); break;
     case EV_TIMER: t->blink = !t->blink; paint(w); break;
+    case EV_WHEEL:
+        t->view = MAX(0, MIN(MAX(0, t->count + 1 - term_rows(w)), t->view - ev->wheel * 3));
+        paint(w);
+        break;
     case EV_KEY: {
         struct key_event *k = &ev->key;
         if (!k->pressed) break;

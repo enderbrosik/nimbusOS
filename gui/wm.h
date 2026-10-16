@@ -18,6 +18,8 @@ enum {
     EV_BLUR,
     EV_TIMER,
     EV_DESTROY,         /* window is being destroyed: free app state */
+    EV_WHEEL,           /* e.wheel clicks, > 0 = scroll down; sent to the window under the mouse */
+    EV_DROP,            /* drag-and-drop: e.path dropped at e.x,e.y (e.copy = Ctrl held) */
 };
 
 typedef struct event {
@@ -26,6 +28,9 @@ typedef struct event {
     int button;         /* MOUSE_LEFT/RIGHT/MIDDLE for down/up */
     u8 buttons;         /* buttons held */
     struct key_event key;
+    int wheel;
+    const char *path;   /* EV_DROP */
+    bool copy;
 } event_t;
 
 #define WF_RESIZABLE   1
@@ -92,5 +97,15 @@ int       wm_mouse_x(void);
 int       wm_mouse_y(void);
 enum { CURSOR_ARROW, CURSOR_TEXT, CURSOR_RESIZE_H, CURSOR_RESIZE_V, CURSOR_RESIZE_NWSE, CURSOR_RESIZE_NESW, CURSOR_CROSS };
 void      wm_set_app_cursor(int cursor);          /* cursor while hovering a client */
+bool      wm_set_resolution(int w, int h);        /* live mode switch */
+
+/* Drag-and-drop of a file/folder path.  An app calls wm_begin_dnd while it
+ * has the mouse captured; on release the window under the cursor gets
+ * EV_DROP (or the desktop handles it).  Ctrl at release = copy. */
+void      wm_begin_dnd(const char *path, int icon);
+window_t *wm_window_under(int x, int y);
+void      wm_send_drop(window_t *w, const char *path, int screen_x, int screen_y, bool copy);
+extern int g_dblclick_ms;
+void      wm_repaint_all(void);                  /* theme changed: every window repaints */
 u64       wm_ticks(void);
 #endif

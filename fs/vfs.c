@@ -280,3 +280,57 @@ int vfs_list(const char *path, struct vfs_item **out)
     *out = items;
     return r < 0 ? r : n;
 }
+
+int vfs_copy_tree(const char *src, const char *dst)
+{
+    struct nbfs_stat st;
+    int r = nbfs_stat(ROOTFS, src, &st);
+    if (r) return r;
+    if (st.type == NBFS_TYPE_FILE) {
+        char *data;
+        u32 len;
+        r = vfs_read_all(src, &data, &len);
+        if (r) return r;
+        r = vfs_write_all(dst, data, len);
+        kfree(data);
+        return r;
+    }
+    r = nbfs_mkdir(ROOTFS, dst);
+    if (r) return r;
+    struct vfs_item *items;
+    int n = vfs_list(src, &items);
+    for (int i = 0; i < n && !r; i++) {
+        char a[NBFS_PATH_MAX], b[NBFS_PATH_MAX];
+        nbfs_path_join(src, items[i].name, a, sizeof a);
+        nbfs_path_join(dst, items[i].name, b, sizeof b);
+        r = vfs_copy_tree(a, b);
+    }
+    if (n > 0) kfree(items);
+    return r;
+}
+
+int vfs_move_into(const char *src, const char *dir, bool copy, char *out, int max)
+{
+    char parent[NBFS_PATH_MAX], dst[NBFS_PATH_MAX];
+    const char *name = nbfs_path_basename(src);
+    nbfs_path_parent(src, parent, sizeof parent);
+    if (!vfs_is_dir(dir)) return NBFS_ENOTDIR;
+    nbfs_path_join(dir, name, dst, sizeof dst);
+    if (!copy && !strcmp(parent, dir)) { strlcpy(out, src, max); return NBFS_OK; }   /* nothing to do */
+    /* never into itself */
+    int sl = strlen(src);
+    if (!strncmp(dir, src, sl) && (dir[sl] == '/' || dir[sl] == 0)) return NBFS_EINVAL;
+    if (vfs_exists(dst)) {
+        if (!copy) return NBFS_EEXIST;
+        const char *dot = strrchr(name, '.');
+        int base = dot && dot != name ? (int)(dot - name) : (int)strlen(name);
+        for (int i = 2; i < 100 && vfs_exists(dst); i++) {
+            char nn[NBFS_NAME_MAX + 1];
+            snprintf(nn, sizeof nn, "%.*s (%d)%s", base, name, i, dot && dot != name ? dot : "");
+            nbfs_path_join(dir, nn, dst, sizeof dst);
+        }
+    }
+    int r = copy ? vfs_copy_tree(src, dst) : nbfs_rename(ROOTFS, src, dst);
+    if (!r) strlcpy(out, dst, max);
+    return r;
+}

@@ -31,7 +31,7 @@ static void setup(const menu_item_t *items, int n, menu_cb_t cb, void *ctx, bool
         m.items[i] = items[i];
         strlcpy(m.labels[i], items[i].label ? items[i].label : "", sizeof m.labels[i]);
         m.items[i].label = m.labels[i];
-        int tw = gfx_text_width(m.labels[i]) + 60;
+        int tw = gfx_ui_width(m.labels[i]) + 60;
         if (tw > w) w = tw;
         h += item_h(i);
     }
@@ -121,7 +121,7 @@ void menu_draw(surface_t *s)
                 fg = 0xFFFFFF;
             }
             if (it->icon >= 0) icon_draw_small(s, it->icon, x0 + 8, y + (h - 16) / 2);
-            gfx_text(s, x0 + 32, y + (h - 16) / 2, it->label, fg, COLOR_NONE);
+            gfx_ui_text(s, x0 + 32, y + (h - 16) / 2, it->label, fg);
         }
         y += h;
     }

@@ -18,6 +18,46 @@
 static u8 font[256 * 16];
 static bool font_ok;
 
+/* ---- UI font -------------------------------------------------------------
+ * For every glyph: its ink columns give a proportional advance width, and an
+ * 8x16 alpha map is made by upscaling the 1-bit glyph with Scale2x (which
+ * fills in diagonal stair-steps, cf. Andrea Mazzoleni's "Scale2x" algorithm)
+ * and averaging each 2x2 block back down.  Straight edges stay crisp,
+ * diagonals and curves get partially covered pixels. */
+bool g_ui_smooth = true;
+static u8 ui_alpha[256][16][8];
+static u8 ui_left[256], ui_adv[256];
+
+static int bit(const u8 *g, int x, int y)
+{
+    if (x < 0 || y < 0 || x >= 8 || y >= 16) return 0;
+    return (g[y] >> (7 - x)) & 1;
+}
+
+static void build_ui_font(void)
+{
+    for (int c = 0; c < 256; c++) {
+        const u8 *g = font + c * 16;
+        int left = 8, right = -1;
+        for (int y = 0; y < 16; y++)
+            for (int x = 0; x < 8; x++)
+                if (bit(g, x, y)) { if (x < left) left = x; if (x > right) right = x; }
+        if (right < 0) { ui_left[c] = 0; ui_adv[c] = c == ' ' ? 4 : 5; }
+        else { ui_left[c] = left; ui_adv[c] = right - left + 2; }
+        for (int y = 0; y < 16; y++)
+            for (int x = 0; x < 8; x++) {
+                int P = bit(g, x, y), A = bit(g, x, y - 1), B = bit(g, x + 1, y);
+                int C = bit(g, x - 1, y), D = bit(g, x, y + 1);
+                int e0 = (C == A && C != D && A != B) ? A : P;
+                int e1 = (A == B && A != C && B != D) ? B : P;
+                int e2 = (D == C && D != B && C != A) ? C : P;
+                int e3 = (B == D && B != A && D != C) ? D : P;
+                int cov = e0 + e1 + e2 + e3;      /* 0..4 quarter pixels */
+                ui_alpha[c][y][x] = cov == 4 ? 255 : (u8)(cov * 60);
+            }
+    }
+}
+
 void gfx_init(void)
 {
     if (g_bootinfo.font_addr) {
@@ -30,6 +70,7 @@ void gfx_init(void)
                 font[c * 16 + y] = (y == 3 || y == 12) ? 0x7E : 0x42;
     }
     klog("[gfx ] font %s\n", font_ok ? "loaded from VGA ROM" : "missing, using boxes");
+    build_ui_font();
 }
 
 rect_t rect_intersect(rect_t a, rect_t b)
@@ -321,4 +362,70 @@ int gfx_text_scaled(surface_t *s, int x, int y, const char *str, int scale, u32 
                 if (g[j] & (0x80 >> i)) gfx_fill_rect(s, x + i * scale, y + j * scale, scale, scale, fg);
     }
     return x - x0;
+}
+
+static int ui_char(surface_t *s, int x, int y, unsigned char ch, u32 fg)
+{
+    int l = ui_left[ch], adv = ui_adv[ch];
+    rect_t cell = rect_intersect(rect_make(x, y, adv, FONT_H), s->clip);
+    if (!rect_empty(cell)) {
+        for (int j = cell.y - y; j < cell.y - y + cell.h; j++) {
+            u32 *row = s->px + (y + j) * s->pitch;
+            for (int i = cell.x - x; i < cell.x - x + cell.w; i++) {
+                if (i + l >= 8) continue;
+                int a = ui_alpha[ch][j][i + l];
+                if (a == 255) row[x + i] = fg;
+                else if (a) row[x + i] = color_blend(row[x + i], fg, a);
+            }
+        }
+    }
+    return adv;
+}
+
+int gfx_ui_text(surface_t *s, int x, int y, const char *str, u32 fg)
+{
+    if (!g_ui_smooth) return gfx_text(s, x, y, str, fg, COLOR_NONE);
+    int x0 = x;
+    for (; *str; str++) x += *str == '\t' ? 16 : ui_char(s, x, y, (unsigned char)*str, fg);
+    return x - x0;
+}
+
+int gfx_ui_text_bold(surface_t *s, int x, int y, const char *str, u32 fg)
+{
+    if (!g_ui_smooth) return gfx_text_bold(s, x, y, str, fg);
+    int x0 = x;
+    for (; *str; str++) {
+        unsigned char c = (unsigned char)*str;
+        ui_char(s, x, y, c, fg);
+        x += ui_char(s, x + 1, y, c, fg) + 1;
+    }
+    return x - x0;
+}
+
+int gfx_ui_width_n(const char *str, int n)
+{
+    if (!g_ui_smooth) { int l = strlen(str); return (n < l ? n : l) * FONT_W; }
+    int w = 0;
+    for (int i = 0; i < n && str[i]; i++) w += str[i] == '\t' ? 16 : ui_adv[(unsigned char)str[i]];
+    return w;
+}
+
+int gfx_ui_width(const char *str) { return gfx_ui_width_n(str, 0x7FFFFFFF); }
+
+void gfx_ui_text_ellipsis(surface_t *s, int x, int y, const char *str, int max_w, u32 fg)
+{
+    if (gfx_ui_width(str) <= max_w) { gfx_ui_text(s, x, y, str, fg); return; }
+    int dots = gfx_ui_width("...");
+    int n = strlen(str);
+    while (n > 0 && gfx_ui_width_n(str, n) + dots > max_w) n--;
+    char buf[256];
+    if (n > 250) n = 250;
+    memcpy(buf, str, n);
+    strcpy(buf + n, "...");
+    gfx_ui_text(s, x, y, buf, fg);
+}
+
+void gfx_ui_centered(surface_t *s, rect_t r, const char *str, u32 fg)
+{
+    gfx_ui_text(s, r.x + (r.w - gfx_ui_width(str)) / 2, r.y + (r.h - FONT_H) / 2, str, fg);
 }

@@ -451,6 +451,11 @@ static void on_event(window_t *w, event_t *ev)
     rect_t v = view_rect(w);
     switch (ev->type) {
     case EV_PAINT: layout(w); paint(w); break;
+    case EV_WHEEL:
+        if (ev->key.mods & MOD_SHIFT) p->ox += ev->wheel * 48;
+        else p->oy += ev->wheel * 48;
+        paint(w);       /* paint() clamps the offsets */
+        break;
     case EV_MOUSE_DOWN: {
         p->pressed = -1;
         if (ev->button == MOUSE_LEFT && (p->pressed = ui_btn_hit(p->btn, NBTN, ev->x, ev->y)) >= 0) { paint(w); break; }

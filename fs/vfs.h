@@ -43,5 +43,9 @@ struct vfs_item {
  * insensitive).  *out is kmalloc'ed; returns count or a negative error. */
 int  vfs_list(const char *path, struct vfs_item **out);
 void vfs_format_size(u32 bytes, char *out, int max);
+int  vfs_copy_tree(const char *src, const char *dst);
+/* Move (or copy) src into directory dir, keeping its name.  A copy into the
+ * same folder gets a unique "name (2)" style name.  out receives the new path. */
+int  vfs_move_into(const char *src, const char *dir, bool copy, char *out, int max);
 void vfs_format_time(u32 t, char *out, int max);
 #endif

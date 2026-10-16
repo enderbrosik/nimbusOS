@@ -7,6 +7,7 @@
  *   0x00000000-0x00000FFF  unmapped (NULL guard)
  *   0x00001000-0x00FFFFFF  identity mapped: BIOS area, boot data, kernel
  *   0xC0000000-0xCFFFFFFF  kernel heap (grown on demand)
+ *   0xD0000000-0xD0FFFFFF  DMA buffers for devices (uncached)
  *   0xE0000000-0xEFFFFFFF  linear framebuffer
  *   0xFFC00000-0xFFFFFFFF  recursive mapping of the page tables
  * Other physical ranges (ACPI tables, MMIO) are identity mapped on demand.
@@ -14,6 +15,8 @@
 #define VMM_IDENTITY_END 0x01000000
 #define VMM_HEAP_BASE    0xC0000000
 #define VMM_HEAP_MAX     0xD0000000
+#define VMM_DMA_BASE     0xD0000000
+#define VMM_DMA_END      0xD1000000
 #define VMM_FB_BASE      0xE0000000
 
 #define PTE_PRESENT  0x001

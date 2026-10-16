@@ -65,7 +65,12 @@ static void load_wallpaper(void)
         surface_t *img = bmp_load(wall_path);
         if (img) {
             wall = surface_create(SCREEN_W, SCREEN_H);
-            if (wall) gfx_blit_scaled(wall, rect_make(0, 0, SCREEN_W, SCREEN_H), img);
+            if (wall) {
+                /* "fill": scale to cover the screen keeping the aspect ratio, crop the centre */
+                int dw = SCREEN_W, dh = img->h * SCREEN_W / img->w;
+                if (dh < SCREEN_H) { dh = SCREEN_H; dw = img->w * SCREEN_H / img->h; }
+                gfx_blit_scaled(wall, rect_make((SCREEN_W - dw) / 2, (SCREEN_H - dh) / 2, dw, dh), img);
+            }
             surface_destroy(img);
             klog("[desk] wallpaper %s loaded\n", wall_path);
         } else {
@@ -149,6 +154,7 @@ static void free_cell(int *x, int *y, int except)
 /* Positions of icons from before a refresh, so existing icons stay put. */
 static struct { char key[80]; int x, y; } prev_pos[MAX_ICONS];
 static int nprev;
+static bool use_prev = true;     /* false while re-laying out for a new screen size */
 
 static void apply_saved_positions(void)
 {
@@ -173,7 +179,7 @@ static void apply_saved_positions(void)
         }
         kfree(cfg);
     }
-    for (int i = 0; i < nicons; i++)
+    for (int i = 0; i < nicons && use_prev; i++)
         for (int k = 0; k < nprev; k++)
             if (!strcmp(icons[i].key, prev_pos[k].key)) { icons[i].x = prev_pos[k].x; icons[i].y = prev_pos[k].y; }
     /* validate saved positions, then auto-place the rest column by column */
@@ -222,7 +228,7 @@ void desktop_refresh(void)
     }
     nicons = 0;
     for (int a = 0; a < APP_COUNT && nicons < MAX_ICONS; a++) {
-        if (!app_visible(a)) continue;
+        if (!app_visible(a) || g_apps[a].start_menu_only) continue;
         struct dicon *d = &icons[nicons++];
         memset(d, 0, sizeof *d);
         snprintf(d->key, sizeof d->key, "app:%s", g_apps[a].name);
@@ -251,6 +257,14 @@ void desktop_refresh(void)
     klog("[desk] %d icons\n", nicons);
 }
 
+void desktop_screen_changed(void)
+{
+    load_wallpaper();
+    use_prev = false;       /* re-place everything from the saved config */
+    desktop_refresh();
+    use_prev = true;
+}
+
 void desktop_init(void)
 {
     load_desktop_cfg();
@@ -261,30 +275,42 @@ void desktop_init(void)
 /* ---- drawing ------------------------------------------------------- */
 static void draw_label(surface_t *s, struct dicon *d, int x, int y, bool sel)
 {
-    /* up to two centred lines of ~10 characters, ellipsis on overflow */
-    int cols = (GRID_W - 6) / FONT_W;
-    char l1[16] = "", l2[16] = "";
+    /* up to two centred lines (UI font), breaking at a space when possible,
+     * ellipsis when the second line would overflow */
+    int maxw = GRID_W - 2;
+    char l1[NBFS_NAME_MAX + 1], l2[NBFS_NAME_MAX + 4];
+    l2[0] = 0;
     int len = strlen(d->label);
-    if (len <= cols) {
+    /* a single word that is only a little too wide stays on one line,
+     * overflowing the cell slightly, rather than breaking mid-word */
+    bool one_word = !strchr(d->label, ' ');
+    if (gfx_ui_width(d->label) <= maxw || (one_word && gfx_ui_width(d->label) <= GRID_W + 16)) {
         strlcpy(l1, d->label, sizeof l1);
     } else {
-        int brk = cols;
-        for (int i = cols; i > 3; i--) if (d->label[i] == ' ') { brk = i; break; }
+        int fit = 0;
+        while (fit < len && gfx_ui_width_n(d->label, fit + 1) <= maxw) fit++;
+        int brk = fit;
+        for (int i = fit; i > 2; i--) if (d->label[i] == ' ') { brk = i; break; }
         memcpy(l1, d->label, brk);
         l1[brk] = 0;
         const char *rest = d->label + brk + (d->label[brk] == ' ');
-        if ((int)strlen(rest) <= cols) strlcpy(l2, rest, sizeof l2);
-        else { memcpy(l2, rest, cols - 2); l2[cols - 2] = 0; strlcat(l2, "..", sizeof l2); }
+        if (gfx_ui_width(rest) <= maxw) strlcpy(l2, rest, sizeof l2);
+        else {
+            int n = strlen(rest);
+            while (n > 0 && gfx_ui_width_n(rest, n) + gfx_ui_width("...") > maxw) n--;
+            memcpy(l2, rest, n);
+            strcpy(l2 + n, "...");
+        }
     }
     int lines = l2[0] ? 2 : 1;
-    int w1 = gfx_text_width(l1), w2 = gfx_text_width(l2), tw = MAX(w1, w2);
+    int w1 = gfx_ui_width(l1), w2 = gfx_ui_width(l2), tw = MAX(w1, w2);
     if (sel) gfx_blend_rect(s, x + (GRID_W - tw) / 2 - 3, y + 40, tw + 6, lines * 16 + 2, C_SELECT, 200);
     const char *ls[2] = { l1, l2 };
     int ws[2] = { w1, w2 };
     for (int i = 0; i < lines; i++) {
         int tx = x + (GRID_W - ws[i]) / 2, ty = y + 41 + i * 16;
-        if (!sel) gfx_text(s, tx + 1, ty + 1, ls[i], 0x000000, COLOR_NONE);
-        gfx_text(s, tx, ty, ls[i], 0xFFFFFF, COLOR_NONE);
+        if (!sel) gfx_ui_text(s, tx + 1, ty + 1, ls[i], 0x000000);
+        gfx_ui_text(s, tx, ty, ls[i], 0xFFFFFF);
     }
 }
 
@@ -420,15 +446,14 @@ enum { DM_NEW_FOLDER = 1, DM_NEW_TEXT, DM_WALLPAPER, DM_REFRESH, DM_PROPERTIES,
        IM_OPEN = 20, IM_RENAME, IM_DELETE, IM_PROPS };
 static int menu_icon = -1;
 
-static void place_new_icon_at_menu(const char *name)
+static void place_icon_at(const char *name, int px, int py)
 {
-    /* remember where the user right-clicked so the new icon appears there */
     char key[80];
     snprintf(key, sizeof key, "file:%s", name);
     desktop_refresh();
     for (int i = 0; i < nicons; i++) {
         if (strcmp(icons[i].key, key)) continue;
-        int x = menu_x - GRID_W / 2, y = menu_y - GRID_H / 3;
+        int x = px - GRID_W / 2, y = py - GRID_H / 3;
         snap(&x, &y);
         icons[i].x = -1000;
         free_cell(&x, &y, i);
@@ -437,6 +462,47 @@ static void place_new_icon_at_menu(const char *name)
         save_positions();
         wm_damage(rect_make(0, 0, SCREEN_W, SCREEN_H - TASKBAR_H));
     }
+}
+
+/* remember where the user right-clicked so the new icon appears there */
+static void place_new_icon_at_menu(const char *name) { place_icon_at(name, menu_x, menu_y); }
+
+static void drop_error(const char *what, int r)
+{
+    char msg[200];
+    snprintf(msg, sizeof msg, "Cannot %s: %s.", what, nbfs_strerror(r));
+    msgbox(NULL, "Desktop", msg, ICON_ERROR, MB_OK, NULL, NULL);
+}
+
+/* Drop of a file/folder onto icon `target` (folder: move into it; app: open
+ * the file with it).  Returns false if the target does not accept it. */
+static bool drop_on_icon(int target, const char *path, bool copy)
+{
+    struct dicon *t = &icons[target];
+    char out[NBFS_PATH_MAX];
+    if (t->app >= 0) {
+        if (vfs_is_dir(path) && t->app != APP_EXPLORER && t->app != APP_TERMINAL) return false;
+        klog("[desk] open %s with %s\n", path, g_apps[t->app].name);
+        app_launch(t->app, path);
+        return true;
+    }
+    if (!t->is_dir || !strcmp(t->path, path)) return false;
+    int r = vfs_move_into(path, t->path, copy, out, sizeof out);
+    if (r) drop_error(copy ? "copy" : "move", r);
+    else klog("[desk] %s %s -> %s\n", copy ? "copied" : "moved", path, out);
+    desktop_refresh();
+    return true;
+}
+
+void desktop_drop(const char *path, int x, int y, bool copy)
+{
+    int i = icon_at(x, y);
+    if (i >= 0 && drop_on_icon(i, path, copy)) return;
+    char out[NBFS_PATH_MAX];
+    int r = vfs_move_into(path, DESKTOP_DIR, copy, out, sizeof out);
+    if (r) { drop_error(copy ? "copy" : "move", r); return; }
+    klog("[desk] %s %s -> %s\n", copy ? "copied" : "dropped", path, out);
+    place_icon_at(nbfs_path_basename(out), x, y);
 }
 
 static void desk_menu_cb(int id, void *ctx)
@@ -543,6 +609,23 @@ void desktop_mouse_up(int x, int y, int button)
     if (button != MOUSE_LEFT) return;
     if (dragging && press_icon >= 0) {
         struct dicon *d = &icons[press_icon];
+        bool copy = keyboard_mods() & MOD_CTRL;
+        window_t *w = wm_window_under(x, y);
+        int target = icon_at(x, y);
+        if (w || (target >= 0 && target != press_icon)) {
+            wm_damage(rect_make(drag_x - drag_off_x, drag_y - drag_off_y, GRID_W, GRID_H));
+            damage_icon(d);
+            dragging = false;
+            int src = press_icon;
+            press_icon = -1;
+            if (icons[src].app < 0) {
+                char path[NBFS_PATH_MAX];
+                strlcpy(path, icons[src].path, sizeof path);
+                if (w) wm_send_drop(w, path, x, y, copy);
+                else drop_on_icon(target, path, copy);
+            }
+            return;
+        }
         wm_damage(rect_make(drag_x - drag_off_x, drag_y - drag_off_y, GRID_W, GRID_H));
         int nx = x - drag_off_x, ny = y - drag_off_y;
         snap(&nx, &ny);

@@ -21,8 +21,8 @@ static int ok_state;
 
 static void line(surface_t *s, int y, const char *k, const char *v)
 {
-    gfx_text(s, 24, y, k, C_TEXT_DIM, COLOR_NONE);
-    gfx_text(s, 170, y, v, C_TEXT, COLOR_NONE);
+    gfx_ui_text(s, 24, y, k, C_TEXT_DIM);
+    gfx_ui_text(s, 170, y, v, C_TEXT);
 }
 
 static void paint(window_t *w)
@@ -32,8 +32,8 @@ static void paint(window_t *w)
     gfx_fill_rect(s, 0, 0, s->w, s->h, 0xFFFFFF);
     gfx_gradient_v(s, 0, 0, s->w, 70, RGB(0, 84, 166), RGB(0, 120, 215));
     icon_draw(s, ICON_COMPUTER, 20, 18);
-    gfx_text_bold(s, 66, 18, "NimbusOS 1.0", 0xFFFFFF);
-    gfx_text(s, 66, 38, "A hobby operating system, written from scratch", RGB(220, 235, 255), COLOR_NONE);
+    gfx_ui_text_bold(s, 66, 18, "NimbusOS 1.0", 0xFFFFFF);
+    gfx_ui_text(s, 66, 38, "A hobby operating system, written from scratch", RGB(220, 235, 255));
     int y = 86;
     line(s, y, "Processor", "x86, 32-bit protected mode"); y += 22;
     snprintf(b, sizeof b, "%u MiB (%u MiB free)", pmm_total_frames() / 256, pmm_free_frames() / 256);

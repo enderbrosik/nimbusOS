@@ -114,9 +114,9 @@ static void draw_card(surface_t *s, int c, bool up, int x, int y)
     u32 col = red(c) ? RGB(210, 20, 30) : RGB(20, 20, 24);
     char sym[2] = { (char)(3 + (suit(c) == 0 ? 3 : suit(c) == 1 ? 0 : suit(c) == 2 ? 1 : 2)), 0 };   /* CP437 suits */
     const char *rs = rank_str(rank(c));
-    gfx_text_bold(s, x + 5, y + 3, rs, col);
+    gfx_ui_text_bold(s, x + 5, y + 3, rs, col);
     gfx_text(s, x + 5, y + 19, sym, col, COLOR_NONE);
-    gfx_text_bold(s, x + CW - 6 - gfx_text_width(rs), y + CH - 38, rs, col);
+    gfx_ui_text_bold(s, x + CW - 6 - gfx_ui_width(rs), y + CH - 38, rs, col);
     gfx_text(s, x + CW - 13, y + CH - 21, sym, col, COLOR_NONE);
     if (rank(c) >= 10) {
         gfx_rect(s, x + 16, y + 20, CW - 32, CH - 40, col);
@@ -130,7 +130,7 @@ static void draw_slot(surface_t *s, int x, int y, const char *label)
 {
     gfx_round_rect(s, x, y, CW, CH, 5, RGB(0, 80, 36));
     gfx_round_rect(s, x + 2, y + 2, CW - 4, CH - 4, 4, FELT);
-    if (label) gfx_text_centered(s, rect_make(x, y, CW, CH), label, RGB(0, 70, 30));
+    if (label) gfx_ui_centered(s, rect_make(x, y, CW, CH), label, RGB(0, 70, 30));
 }
 
 /* Draws the board; the cards being dragged are skipped when skip_drag. */
@@ -172,7 +172,7 @@ static void draw_board(struct sol *g, surface_t *s, bool skip_drag)
     int found = 0;
     for (int f = P_F0; f <= P_F3; f++) found += g->s.p[f].n;
     snprintf(st, sizeof st, "Moves: %d   Cards home: %d/52", g->s.moves, found);
-    gfx_text(s, s->w - gfx_text_width(st) - 10, by + 7, st, C_TEXT, COLOR_NONE);
+    gfx_ui_text(s, s->w - gfx_ui_width(st) - 10, by + 7, st, C_TEXT);
 }
 
 static rect_t drag_rect(struct sol *g)
@@ -197,7 +197,7 @@ static void paint(window_t *w)
     if (g->won) {
         rect_t r = rect_make(w->surface->w / 2 - 120, 300, 240, 40);
         gfx_blend_rect(w->surface, r.x, r.y, r.w, r.h, 0, 150);
-        gfx_text_centered(w->surface, r, "You win! Press New Game.", 0xFFFFFF);
+        gfx_ui_centered(w->surface, r, "You win! Press New Game.", 0xFFFFFF);
     }
     wm_invalidate(w);
 }

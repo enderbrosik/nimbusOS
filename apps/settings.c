@@ -1,0 +1,322 @@
+/*
+ * NimbusOS - Settings.
+ *
+ * Pages: Display (resolution, applied live with a 15 s "keep?" countdown
+ * that reverts on its own), Appearance (accent colour, smooth UI font,
+ * wallpaper), Mouse (pointer speed, double-click time), Date & Time
+ * (time zone offset, 12/24 hour clock).  Everything is stored with
+ * kernel/settings.c in /System/settings.cfg.
+ */
+#include "apps/apps.h"
+#include "gui/wm.h"
+#include "gui/widgets.h"
+#include "gui/icons.h"
+#include "gui/theme.h"
+#include "gui/desktop.h"
+#include "gui/taskbar.h"
+#include "drivers/fb.h"
+#include "drivers/mouse.h"
+#include "kernel/settings.h"
+#include "kernel/heap.h"
+#include "kernel/string.h"
+#include "kernel/kprintf.h"
+
+#define NAV_W 150
+#define ROW 26
+
+enum { PG_DISPLAY, PG_APPEARANCE, PG_MOUSE, PG_TIME, NPAGES };
+static const char *page_names[NPAGES] = { "Display", "Appearance", "Mouse", "Date & Time" };
+static const int page_icons[NPAGES] = { ICON_COMPUTER, ICON_WALLPAPER, ICON_SETTINGS, ICON_INFO };
+
+static const struct { int w, h; } modes[] = {
+    { 800, 600 }, { 1024, 768 }, { 1280, 720 }, { 1280, 800 }, { 1280, 1024 },
+    { 1366, 768 }, { 1440, 900 }, { 1600, 900 }, { 1680, 1050 }, { 1920, 1080 },
+};
+static const u32 accents[8] = {
+    RGB(0, 120, 215), RGB(16, 124, 16), RGB(194, 57, 52), RGB(135, 100, 184),
+    RGB(202, 80, 16), RGB(0, 153, 188), RGB(232, 17, 123), RGB(76, 74, 72),
+};
+static const int speeds[5] = { 2, 3, 4, 6, 8 };
+static const char *speed_names[5] = { "Slow", "Slower", "Normal", "Faster", "Fast" };
+static const int dbl_times[3] = { 300, 450, 650 };
+
+struct settings_app {
+    int page;
+    int sel_mode;
+    rect_t apply_btn, wall_btn, tz_minus, tz_plus;
+    /* "keep display settings?" countdown */
+    window_t *confirm;
+    int old_w, old_h, countdown;
+};
+
+static window_t *set_win;
+
+static rect_t content(window_t *w) { return rect_make(NAV_W + 20, 16, w->surface->w - NAV_W - 36, w->surface->h - 32); }
+
+static void heading(surface_t *s, rect_t c, const char *t)
+{
+    gfx_ui_text_bold(s, c.x, c.y, t, C_TEXT);
+    gfx_hline(s, c.x, c.y + 22, c.w, RGB(220, 220, 226));
+}
+
+static void paint(window_t *w)
+{
+    struct settings_app *a = w->app;
+    surface_t *s = w->surface;
+    gfx_fill_rect(s, 0, 0, s->w, s->h, 0xFFFFFF);
+    /* navigation */
+    gfx_fill_rect(s, 0, 0, NAV_W, s->h, RGB(243, 245, 249));
+    gfx_vline(s, NAV_W - 1, 0, s->h, RGB(222, 225, 232));
+    for (int i = 0; i < NPAGES; i++) {
+        rect_t r = rect_make(6, 12 + i * 34, NAV_W - 12, 30);
+        if (i == a->page) {
+            gfx_round_rect(s, r.x, r.y, r.w, r.h, 4, C_SELECT_LIGHT);
+            gfx_fill_rect(s, r.x, r.y + 6, 3, r.h - 12, C_SELECT);
+        }
+        icon_draw_small(s, page_icons[i], r.x + 10, r.y + 7);
+        gfx_ui_text(s, r.x + 34, r.y + 7, page_names[i], C_TEXT);
+    }
+    rect_t c = content(w);
+    char b[96];
+    switch (a->page) {
+    case PG_DISPLAY: {
+        heading(s, c, "Display resolution");
+        int y = c.y + 34;
+        for (unsigned i = 0; i < ARRAY_SIZE(modes); i++) {
+            bool ok = fb_mode_supported(modes[i].w, modes[i].h);
+            snprintf(b, sizeof b, "%d x %d%s%s", modes[i].w, modes[i].h,
+                     modes[i].w == SCREEN_W && modes[i].h == SCREEN_H ? "   (current)" : "",
+                     ok ? "" : "   (not enough video memory)");
+            ui_radio(s, c.x, y, (int)i == a->sel_mode, NULL);
+            gfx_ui_text(s, c.x + 22, y, b, ok ? C_TEXT : C_TEXT_DIM);
+            y += ROW;
+        }
+        snprintf(b, sizeof b, "Video memory: %u MiB", fb_vram_bytes() >> 20);
+        gfx_ui_text(s, c.x, y + 6, b, C_TEXT_DIM);
+        a->apply_btn = rect_make(c.x + c.w - 100, c.y + c.h - 30, 100, 28);
+        ui_button(s, a->apply_btn, "Apply", BTN_DEFAULT);
+        break;
+    }
+    case PG_APPEARANCE: {
+        heading(s, c, "Accent colour");
+        for (int i = 0; i < 8; i++) {
+            rect_t r = rect_make(c.x + i * 44, c.y + 36, 36, 36);
+            gfx_round_rect(s, r.x, r.y, r.w, r.h, 6, accents[i]);
+            if (accents[i] == g_accent) { gfx_rect(s, r.x - 3, r.y - 3, r.w + 6, r.h + 6, C_TEXT); }
+        }
+        heading(s, rect_make(c.x, c.y + 96, c.w, 0), "Text");
+        ui_checkbox(s, c.x, c.y + 130, g_ui_smooth, NULL);
+        gfx_ui_text(s, c.x + 20, c.y + 130, "Smooth proportional font for menus, titles and labels", C_TEXT);
+        gfx_ui_text(s, c.x + 20, c.y + 152, g_ui_smooth ? "The quick brown fox jumps over the lazy dog." : "", C_TEXT_DIM);
+        heading(s, rect_make(c.x, c.y + 186, c.w, 0), "Background");
+        a->wall_btn = rect_make(c.x, c.y + 220, 180, 28);
+        ui_button(s, a->wall_btn, "Change Wallpaper...", BTN_NORMAL);
+        break;
+    }
+    case PG_MOUSE: {
+        heading(s, c, "Pointer speed");
+        int cur = settings_get_int("mouse_speed", 4);
+        for (int i = 0; i < 5; i++) {
+            ui_radio(s, c.x, c.y + 34 + i * ROW, speeds[i] == cur, NULL);
+            gfx_ui_text(s, c.x + 22, c.y + 34 + i * ROW, speed_names[i], C_TEXT);
+        }
+        heading(s, rect_make(c.x, c.y + 176, c.w, 0), "Double-click speed");
+        static const char *dn[3] = { "Fast (300 ms)", "Normal (450 ms)", "Slow (650 ms)" };
+        for (int i = 0; i < 3; i++) {
+            ui_radio(s, c.x, c.y + 210 + i * ROW, dbl_times[i] == g_dblclick_ms, NULL);
+            gfx_ui_text(s, c.x + 22, c.y + 210 + i * ROW, dn[i], C_TEXT);
+        }
+        gfx_ui_text(s, c.x, c.y + 300, "The mouse wheel scrolls lists, documents and the terminal.", C_TEXT_DIM);
+        break;
+    }
+    case PG_TIME: {
+        heading(s, c, "Date and time");
+        struct rtc_time t;
+        clock_now(&t);
+        snprintf(b, sizeof b, "%02d:%02d:%02d", t.hour, t.minute, t.second);
+        gfx_text_scaled(s, c.x, c.y + 36, b, 3, C_TEXT);
+        snprintf(b, sizeof b, "%04d-%02d-%02d", t.year, t.month, t.day);
+        gfx_ui_text(s, c.x + 4, c.y + 92, b, C_TEXT_DIM);
+        heading(s, rect_make(c.x, c.y + 124, c.w, 0), "Time zone");
+        int tz = settings_get_int("tz_minutes", 0);
+        snprintf(b, sizeof b, "UTC%c%02d:%02d", tz < 0 ? '-' : '+', ABS(tz) / 60, ABS(tz) % 60);
+        a->tz_minus = rect_make(c.x, c.y + 156, 30, 26);
+        a->tz_plus = rect_make(c.x + 150, c.y + 156, 30, 26);
+        ui_button(s, a->tz_minus, "-", BTN_NORMAL);
+        ui_button(s, a->tz_plus, "+", BTN_NORMAL);
+        gfx_ui_centered(s, rect_make(c.x + 30, c.y + 156, 120, 26), b, C_TEXT);
+        gfx_ui_text(s, c.x, c.y + 190, "The hardware clock keeps UTC; the offset is applied for display.", C_TEXT_DIM);
+        heading(s, rect_make(c.x, c.y + 224, c.w, 0), "Clock format");
+        ui_checkbox(s, c.x, c.y + 258, settings_get_int("clock24", 1), NULL);
+        gfx_ui_text(s, c.x + 20, c.y + 258, "Use 24-hour time", C_TEXT);
+        break;
+    }
+    }
+    wm_invalidate(w);
+}
+
+/* ---- display confirmation ---- */
+static void confirm_close(struct settings_app *a, bool keep)
+{
+    window_t *cw = a->confirm;
+    a->confirm = NULL;
+    if (wm_window_alive(cw)) wm_destroy_window(cw);
+    if (keep) {
+        char b[24];
+        snprintf(b, sizeof b, "%dx%d", SCREEN_W, SCREEN_H);
+        settings_set("resolution", b);
+        klog("[sett] kept resolution %s\n", b);
+    } else {
+        wm_set_resolution(a->old_w, a->old_h);
+        klog("[sett] reverted to %dx%d\n", a->old_w, a->old_h);
+    }
+    if (wm_window_alive(set_win)) paint(set_win);
+}
+
+static rect_t keep_btn, revert_btn;
+
+static void confirm_paint(window_t *cw)
+{
+    struct settings_app *a = set_win->app;
+    surface_t *s = cw->surface;
+    gfx_fill_rect(s, 0, 0, s->w, s->h, 0xFFFFFF);
+    icon_draw(s, ICON_COMPUTER, 16, 16);
+    gfx_ui_text_bold(s, 60, 16, "Keep these display settings?", C_TEXT);
+    char b[64];
+    snprintf(b, sizeof b, "Reverting to %dx%d in %d seconds.", a->old_w, a->old_h, a->countdown);
+    gfx_ui_text(s, 60, 40, b, C_TEXT_DIM);
+    keep_btn = rect_make(s->w - 220, s->h - 40, 100, 28);
+    revert_btn = rect_make(s->w - 112, s->h - 40, 100, 28);
+    ui_button(s, keep_btn, "Keep changes", BTN_DEFAULT);
+    ui_button(s, revert_btn, "Revert", BTN_NORMAL);
+    wm_invalidate(cw);
+}
+
+static void confirm_event(window_t *cw, event_t *e)
+{
+    if (!wm_window_alive(set_win)) { if (e->type != EV_DESTROY) wm_destroy_window(cw); return; }
+    struct settings_app *a = set_win->app;
+    switch (e->type) {
+    case EV_PAINT: confirm_paint(cw); break;
+    case EV_TIMER:
+        if (--a->countdown <= 0) confirm_close(a, false);
+        else confirm_paint(cw);
+        break;
+    case EV_MOUSE_UP:
+        if (rect_contains(keep_btn, e->x, e->y)) confirm_close(a, true);
+        else if (rect_contains(revert_btn, e->x, e->y)) confirm_close(a, false);
+        break;
+    case EV_KEY:
+        if (e->key.pressed && e->key.key == KEY_ENTER) confirm_close(a, true);
+        else if (e->key.pressed && e->key.key == KEY_ESC) confirm_close(a, false);
+        break;
+    case EV_CLOSE: confirm_close(a, false); break;
+    case EV_DESTROY: if (a->confirm == cw) a->confirm = NULL; break;
+    }
+}
+
+static void apply_mode(window_t *w)
+{
+    struct settings_app *a = w->app;
+    if (a->sel_mode < 0) return;
+    int nw = modes[a->sel_mode].w, nh = modes[a->sel_mode].h;
+    if (nw == SCREEN_W && nh == SCREEN_H) return;
+    a->old_w = SCREEN_W;
+    a->old_h = SCREEN_H;
+    if (!wm_set_resolution(nw, nh)) {
+        klog("[sett] mode %dx%d failed\n", nw, nh);
+        return;
+    }
+    a->countdown = 15;
+    a->confirm = wm_create("Display Settings", ICON_COMPUTER, 380, 120, WF_DIALOG | WF_NO_TASKBAR, confirm_event, NULL);
+    if (a->confirm) {
+        wm_center(a->confirm);
+        wm_set_modal(w, a->confirm);
+        wm_set_timer(a->confirm, 1000);
+    }
+    paint(w);
+}
+
+static void on_event(window_t *w, event_t *e)
+{
+    struct settings_app *a = w->app;
+    rect_t c = content(w);
+    switch (e->type) {
+    case EV_PAINT: paint(w); break;
+    case EV_TIMER: if (a->page == PG_TIME) paint(w); break;
+    case EV_MOUSE_DOWN: {
+        if (e->x < NAV_W) {
+            int i = (e->y - 12) / 34;
+            if (i >= 0 && i < NPAGES) { a->page = i; klog("[sett] page %s\n", page_names[i]); }
+            paint(w);
+            break;
+        }
+        switch (a->page) {
+        case PG_DISPLAY: {
+            int i = (e->y - c.y - 34) / ROW;
+            if (e->y >= c.y + 34 && i >= 0 && i < (int)ARRAY_SIZE(modes) && e->x < c.x + 300 &&
+                fb_mode_supported(modes[i].w, modes[i].h)) a->sel_mode = i;
+            if (rect_contains(a->apply_btn, e->x, e->y)) { apply_mode(w); return; }
+            break;
+        }
+        case PG_APPEARANCE:
+            for (int i = 0; i < 8; i++)
+                if (rect_contains(rect_make(c.x + i * 44, c.y + 36, 36, 36), e->x, e->y)) {
+                    theme_set_accent(accents[i]);
+                    settings_set_int("accent", (int)accents[i]);
+                    wm_repaint_all();
+                    return;
+                }
+            if (rect_contains(rect_make(c.x, c.y + 128, c.w, 20), e->x, e->y)) {
+                g_ui_smooth = !g_ui_smooth;
+                settings_set_int("smooth_fonts", g_ui_smooth);
+                wm_repaint_all();
+                return;
+            }
+            if (rect_contains(a->wall_btn, e->x, e->y)) { wallpaper_chooser_open(); return; }
+            break;
+        case PG_MOUSE: {
+            int i = (e->y - c.y - 34) / ROW;
+            if (e->y >= c.y + 34 && i >= 0 && i < 5) {
+                settings_set_int("mouse_speed", speeds[i]);
+                mouse_set_speed(speeds[i]);
+            }
+            i = (e->y - c.y - 210) / ROW;
+            if (e->y >= c.y + 210 && i >= 0 && i < 3) {
+                g_dblclick_ms = dbl_times[i];
+                settings_set_int("dblclick_ms", g_dblclick_ms);
+            }
+            break;
+        }
+        case PG_TIME: {
+            int tz = settings_get_int("tz_minutes", 0);
+            if (rect_contains(a->tz_minus, e->x, e->y) && tz > -720) settings_set_int("tz_minutes", tz - 30);
+            if (rect_contains(a->tz_plus, e->x, e->y) && tz < 840) settings_set_int("tz_minutes", tz + 30);
+            if (rect_contains(rect_make(c.x, c.y + 256, 200, 20), e->x, e->y))
+                settings_set_int("clock24", !settings_get_int("clock24", 1));
+            taskbar_changed();
+            break;
+        }
+        }
+        paint(w);
+        break;
+    }
+    case EV_CLOSE: wm_destroy_window(w); break;
+    case EV_DESTROY: kfree(a); set_win = NULL; break;
+    }
+}
+
+void settings_open(const char *page)
+{
+    if (wm_window_alive(set_win)) { wm_focus(set_win); return; }
+    struct settings_app *a = kzalloc(sizeof *a);
+    if (!a) return;
+    a->sel_mode = -1;
+    for (unsigned i = 0; i < ARRAY_SIZE(modes); i++)
+        if (modes[i].w == SCREEN_W && modes[i].h == SCREEN_H) a->sel_mode = i;
+    for (int i = 0; page && i < NPAGES; i++) if (!strcasecmp(page, page_names[i])) a->page = i;
+    set_win = wm_create("Settings", ICON_SETTINGS, 640, 440, WF_NO_MAXIMIZE, on_event, a);
+    if (!set_win) { kfree(a); return; }
+    wm_center(set_win);
+    wm_set_timer(set_win, 1000);
+}

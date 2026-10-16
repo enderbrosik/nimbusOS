@@ -442,6 +442,10 @@ static void on_event(window_t *w, event_t *ev)
     case EV_PAINT: layout(w); scroll_to_cursor(w); paint(w); break;
     case EV_FOCUS: case EV_BLUR: paint(w); break;
     case EV_TIMER: n->blink = !n->blink; paint(w); break;
+    case EV_WHEEL:
+        n->top = MAX(0, MIN((int)n->nlines - 1, n->top + ev->wheel * 3));
+        paint(w);
+        break;
     case EV_KEY: if (ev->key.pressed) handle_key(w, &ev->key); break;
     case EV_MOUSE_DOWN:
         n->pressed = -1;

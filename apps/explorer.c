@@ -47,6 +47,7 @@ struct explorer {
     ui_btn_t btn[NBTN];
     int hover, pressed;
     bool drag_scroll;
+    int drag_cand, press_x, press_y;   /* row that may become a drag */
     u32 signature;
     char pending[NBFS_PATH_MAX];   /* target of rename/delete dialogs */
 };
@@ -133,17 +134,17 @@ static void paint(window_t *w)
     rect_t addr = rect_make(110, 6, s->w - 120, 24);
     ui_sunken(s, addr, 0xFFFFFF);
     icon_draw_small(s, ICON_FOLDER, addr.x + 4, addr.y + 4);
-    gfx_text_ellipsis(s, addr.x + 26, addr.y + 4, e->path, addr.w - 30, C_TEXT);
+    gfx_ui_text_ellipsis(s, addr.x + 26, addr.y + 4, e->path, addr.w - 30, C_TEXT);
 
     /* sidebar */
     gfx_fill_rect(s, 0, TOOLBAR_H, SIDEBAR_W, s->h - TOOLBAR_H - STATUS_H, RGB(244, 247, 252));
     gfx_vline(s, SIDEBAR_W - 1, TOOLBAR_H, s->h - TOOLBAR_H - STATUS_H, RGB(220, 224, 232));
-    gfx_text_bold(s, 10, TOOLBAR_H + 8, "Places", C_TEXT_DIM);
+    gfx_ui_text_bold(s, 10, TOOLBAR_H + 8, "Places", C_TEXT_DIM);
     for (unsigned i = 0; i < ARRAY_SIZE(places); i++) {
         int y = TOOLBAR_H + 30 + i * 24;
         if (!strcmp(e->path, places[i].path)) gfx_fill_rect(s, 4, y - 3, SIDEBAR_W - 9, 22, C_SELECT_LIGHT);
         icon_draw_small(s, places[i].icon, 10, y);
-        gfx_text(s, 32, y, places[i].label, C_TEXT, COLOR_NONE);
+        gfx_ui_text(s, 32, y, places[i].label, C_TEXT);
     }
 
     /* header */
@@ -151,9 +152,9 @@ static void paint(window_t *w)
     int name_w = lr.w - 260;
     gfx_gradient_v(s, lr.x, TOOLBAR_H, lr.w, HEADER_H, 0xFFFFFF, RGB(240, 241, 245));
     gfx_hline(s, lr.x, TOOLBAR_H + HEADER_H - 1, lr.w, RGB(220, 222, 228));
-    gfx_text(s, lr.x + 30, TOOLBAR_H + 3, "Name", C_TEXT_DIM, COLOR_NONE);
-    gfx_text(s, lr.x + name_w + 10, TOOLBAR_H + 3, "Size", C_TEXT_DIM, COLOR_NONE);
-    gfx_text(s, lr.x + name_w + 100, TOOLBAR_H + 3, "Modified", C_TEXT_DIM, COLOR_NONE);
+    gfx_ui_text(s, lr.x + 30, TOOLBAR_H + 3, "Name", C_TEXT_DIM);
+    gfx_ui_text(s, lr.x + name_w + 10, TOOLBAR_H + 3, "Size", C_TEXT_DIM);
+    gfx_ui_text(s, lr.x + name_w + 100, TOOLBAR_H + 3, "Modified", C_TEXT_DIM);
     ui_separator_v(s, lr.x + name_w + 2, TOOLBAR_H + 3, HEADER_H - 6);
     ui_separator_v(s, lr.x + name_w + 92, TOOLBAR_H + 3, HEADER_H - 6);
 
@@ -171,18 +172,18 @@ static void paint(window_t *w)
         }
         bool dir = it->type == NBFS_TYPE_DIR;
         icon_draw_small(s, icon_for_file(it->name, dir), lr.x + 8, y + 3);
-        gfx_text_ellipsis(s, lr.x + 30, y + 3, it->name, name_w - 34, C_TEXT);
+        gfx_ui_text_ellipsis(s, lr.x + 30, y + 3, it->name, name_w - 34, C_TEXT);
         char buf[32];
         if (!dir) {
             vfs_format_size(it->size, buf, sizeof buf);
-            gfx_text(s, lr.x + name_w + 10, y + 3, buf, C_TEXT_DIM, COLOR_NONE);
+            gfx_ui_text(s, lr.x + name_w + 10, y + 3, buf, C_TEXT_DIM);
         } else {
-            gfx_text(s, lr.x + name_w + 10, y + 3, "Folder", C_TEXT_DIM, COLOR_NONE);
+            gfx_ui_text(s, lr.x + name_w + 10, y + 3, "Folder", C_TEXT_DIM);
         }
         vfs_format_time(it->mtime, buf, sizeof buf);
-        gfx_text(s, lr.x + name_w + 100, y + 3, buf, C_TEXT_DIM, COLOR_NONE);
+        gfx_ui_text(s, lr.x + name_w + 100, y + 3, buf, C_TEXT_DIM);
     }
-    if (e->n == 0) gfx_text(s, lr.x + 30, lr.y + 10, "This folder is empty.", C_TEXT_DIM, COLOR_NONE);
+    if (e->n == 0) gfx_ui_text(s, lr.x + 30, lr.y + 10, "This folder is empty.", C_TEXT_DIM);
     s->clip = old;
     ui_vscroll(s, scroll_rect(w), e->n, visible_rows(w), e->scroll);
 
@@ -201,7 +202,7 @@ static void paint(window_t *w)
         nbfs_statfs(ROOTFS, &total, &freeb);
         snprintf(st, sizeof st, "%d items   |   %u MiB free on System Disk", e->n, freeb >> 20);
     }
-    gfx_text_ellipsis(s, 8, sy + 3, st, s->w - 16, C_TEXT);
+    gfx_ui_text_ellipsis(s, 8, sy + 3, st, s->w - 16, C_TEXT);
     wm_invalidate(w);
 }
 
@@ -385,6 +386,28 @@ static void on_event(window_t *w, event_t *ev)
     switch (ev->type) {
     case EV_PAINT: layout(w); paint(w); break;
     case EV_RESIZE: load(w, true); break;
+    case EV_DROP: {
+        /* onto a folder row: into that folder; anywhere else: into this folder */
+        char dir[NBFS_PATH_MAX], out[NBFS_PATH_MAX];
+        strlcpy(dir, e->path, sizeof dir);
+        if (rect_contains(lr, ev->x, ev->y)) {
+            int i = e->scroll + (ev->y - lr.y) / ROW_H;
+            if (i < e->n && e->items[i].type == NBFS_TYPE_DIR) item_path(e, i, dir);
+        }
+        if (!strcmp(dir, ev->path)) break;     /* dropped onto itself */
+        int r = vfs_move_into(ev->path, dir, ev->copy, out, sizeof out);
+        if (r) {
+            char m[200];
+            snprintf(m, sizeof m, "Cannot %s \"%s\": %s.", ev->copy ? "copy" : "move", nbfs_path_basename(ev->path), nbfs_strerror(r));
+            msgbox(w, "File Explorer", m, ICON_ERROR, MB_OK, NULL, NULL);
+        } else klog("[expl] %s %s -> %s\n", ev->copy ? "copied" : "moved", ev->path, out);
+        refresh(w);
+        break;
+    }
+    case EV_WHEEL:
+        e->scroll = MAX(0, MIN(MAX(0, e->n - visible_rows(w)), e->scroll + ev->wheel * 3));
+        paint(w);
+        break;
     case EV_TIMER: {
         /* pick up changes made elsewhere (terminal, desktop, other windows) */
         struct vfs_item *tmp;
@@ -396,6 +419,15 @@ static void on_event(window_t *w, event_t *ev)
         break;
     }
     case EV_MOUSE_MOVE: {
+        if (e->drag_cand >= 0 && (ev->buttons & MOUSE_LEFT) &&
+            ABS(ev->x - e->press_x) + ABS(ev->y - e->press_y) > 6) {
+            char p[NBFS_PATH_MAX];
+            item_path(e, e->drag_cand, p);
+            int icon = icon_for_file(e->items[e->drag_cand].name, e->items[e->drag_cand].type == NBFS_TYPE_DIR);
+            e->drag_cand = -1;
+            wm_begin_dnd(p, icon);
+            break;
+        }
         if (e->drag_scroll) {
             e->scroll = ui_vscroll_offset_for(sr, e->n, visible_rows(w), ev->y);
             paint(w);
@@ -422,6 +454,7 @@ static void on_event(window_t *w, event_t *ev)
         if (rect_contains(lr, ev->x, ev->y)) {
             int i = e->scroll + (ev->y - lr.y) / ROW_H;
             e->sel = (i < e->n) ? i : -1;
+            if (ev->button == MOUSE_LEFT && e->sel >= 0) { e->drag_cand = e->sel; e->press_x = ev->x; e->press_y = ev->y; }
             paint(w);
             if (ev->button == MOUSE_RIGHT) {
                 rect_t c = wm_client_rect(w);
@@ -449,6 +482,7 @@ static void on_event(window_t *w, event_t *ev)
         break;
     case EV_MOUSE_UP: {
         e->drag_scroll = false;
+        e->drag_cand = -1;
         int p = e->pressed;
         e->pressed = -1;
         if (p >= 0 && ui_btn_hit(e->btn, NBTN, ev->x, ev->y) == p) {
@@ -483,6 +517,7 @@ void explorer_open(const char *path)
     if (!e) return;
     strlcpy(e->path, path && vfs_is_dir(path) ? path : "/", sizeof e->path);
     e->sel = -1;
+    e->drag_cand = -1;
     e->hover = e->pressed = -1;
     window_t *w = wm_create("File Explorer", ICON_EXPLORER, 640, 420, WF_RESIZABLE, on_event, e);
     if (!w) { kfree(e); return; }

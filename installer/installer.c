@@ -112,8 +112,8 @@ static void header(surface_t *g, const char *title, const char *sub)
 {
     gfx_gradient_v(g, 0, 0, g->w, 64, RGB(0, 84, 166), RGB(0, 120, 215));
     icon_draw(g, ICON_INSTALLER, 18, 16);
-    gfx_text_bold(g, 62, 14, title, 0xFFFFFF);
-    gfx_text(g, 62, 34, sub, RGB(215, 232, 255), COLOR_NONE);
+    gfx_ui_text_bold(g, 62, 14, title, 0xFFFFFF);
+    gfx_ui_text(g, 62, 34, sub, RGB(215, 232, 255));
 }
 
 static void buttons(window_t *w)
@@ -131,7 +131,7 @@ static void buttons(window_t *w)
     }
 }
 
-static int bw(const char *label) { return label ? MAX(110, gfx_text_width(label) + 28) : 110; }
+static int bw(const char *label) { return label ? MAX(110, gfx_ui_width(label) + 28) : 110; }
 
 static void set_buttons(struct inst *s, const char *back, const char *next, const char *cancel, bool next_ok)
 {
@@ -163,7 +163,7 @@ static void paint(window_t *w)
         break;
     case P_DISK: {
         header(g, "Choose a disk", "Select the disk to install NimbusOS on.");
-        gfx_text(g, 24, 84, "Attached drives:", C_TEXT, COLOR_NONE);
+        gfx_ui_text(g, 24, 84, "Attached drives:", C_TEXT);
         int shown = 0;
         for (int i = 0; i < ATA_MAX_DRIVES; i++) {
             if (!g_ata[i].present) continue;
@@ -174,11 +174,11 @@ static void paint(window_t *w)
             gfx_rect(g, r.x, r.y, r.w, r.h, sel ? C_SELECT : RGB(210, 210, 216));
             icon_draw(g, ICON_DRIVE, r.x + 6, r.y + 4);
             snprintf(b, sizeof b, "%s  -  %s", g_ata[i].name, g_ata[i].model);
-            gfx_text_bold(g, r.x + 46, r.y + 4, b, ok ? C_TEXT : C_TEXT_DIM);
+            gfx_ui_text_bold(g, r.x + 46, r.y + 4, b, ok ? C_TEXT : C_TEXT_DIM);
             if (i == s->boot_drive) snprintf(b, sizeof b, "%u MiB  -  live system disk (in use, cannot install here)", g_ata[i].sectors / 2048);
             else if (!ok) snprintf(b, sizeof b, "%u MiB  -  too small (needs at least 16 MiB)", g_ata[i].sectors / 2048);
             else snprintf(b, sizeof b, "%u MiB  (%u sectors)", g_ata[i].sectors / 2048, g_ata[i].sectors);
-            gfx_text(g, r.x + 46, r.y + 21, b, ok ? C_TEXT_DIM : RGB(170, 90, 80), COLOR_NONE);
+            gfx_ui_text(g, r.x + 46, r.y + 21, b, ok ? C_TEXT_DIM : RGB(170, 90, 80));
         }
         bool any = false;
         for (int i = 0; i < ATA_MAX_DRIVES; i++) if (drive_usable(s, i)) any = true;
@@ -193,15 +193,15 @@ static void paint(window_t *w)
         struct ata_drive *d = &g_ata[s->target];
         gfx_gradient_v(g, 0, 0, g->w, 64, RGB(170, 30, 30), RGB(210, 50, 40));
         icon_draw(g, ICON_WARNING, 18, 16);
-        gfx_text_bold(g, 62, 14, "Confirm: this disk will be erased", 0xFFFFFF);
-        gfx_text(g, 62, 34, "Read carefully before continuing.", RGB(255, 225, 220), COLOR_NONE);
-        gfx_text(g, 24, 84, "The following drive will be COMPLETELY ERASED:", C_TEXT, COLOR_NONE);
+        gfx_ui_text_bold(g, 62, 14, "Confirm: this disk will be erased", 0xFFFFFF);
+        gfx_ui_text(g, 62, 34, "Read carefully before continuing.", RGB(255, 225, 220));
+        gfx_ui_text(g, 24, 84, "The following drive will be COMPLETELY ERASED:", C_TEXT);
         ui_sunken(g, rect_make(24, 106, W - 48, 106), RGB(255, 248, 246));
-        snprintf(b, sizeof b, "Drive:      %s", d->name);              gfx_text(g, 36, 114, b, C_TEXT, COLOR_NONE);
-        snprintf(b, sizeof b, "Model:      %s", d->model);             gfx_text(g, 36, 134, b, C_TEXT, COLOR_NONE);
-        snprintf(b, sizeof b, "Size:       %u MiB (%u sectors)", d->sectors / 2048, d->sectors); gfx_text(g, 36, 154, b, C_TEXT, COLOR_NONE);
-        snprintf(b, sizeof b, "Contains:   %s", s->contents);          gfx_text(g, 36, 174, b, C_TEXT, COLOR_NONE);
-        gfx_text_bold(g, 36, 192, "ALL EXISTING DATA ON THIS DRIVE WILL BE DESTROYED.", RGB(190, 20, 20));
+        snprintf(b, sizeof b, "Drive:      %s", d->name);              gfx_ui_text(g, 36, 114, b, C_TEXT);
+        snprintf(b, sizeof b, "Model:      %s", d->model);             gfx_ui_text(g, 36, 134, b, C_TEXT);
+        snprintf(b, sizeof b, "Size:       %u MiB (%u sectors)", d->sectors / 2048, d->sectors); gfx_ui_text(g, 36, 154, b, C_TEXT);
+        snprintf(b, sizeof b, "Contains:   %s", s->contents);          gfx_ui_text(g, 36, 174, b, C_TEXT);
+        gfx_ui_text_bold(g, 36, 192, "ALL EXISTING DATA ON THIS DRIVE WILL BE DESTROYED.", RGB(190, 20, 20));
         ui_text_wrapped(g, rect_make(24, 222, W - 48, 70),
             "Setup will write a new boot loader and partition table, create a new NimbusFS "
             "file system across the whole drive and copy NimbusOS onto it. This cannot be undone.", C_TEXT);
@@ -220,8 +220,8 @@ static void paint(window_t *w)
             u32 c = i < s->step ? RGB(30, 140, 60) : i == s->step && s->page == P_INSTALL ? C_TEXT : C_TEXT_DIM;
             const char *mark = i < s->step ? "[done]" : i == s->step && s->page == P_INSTALL ? " ...  " : "      ";
             if (s->page == P_FAILED && i == s->step) { c = RGB(190, 20, 20); mark = "[fail]"; }
-            gfx_text(g, 30, y, mark, c, COLOR_NONE);
-            gfx_text(g, 90, y, step_names[i], c, COLOR_NONE);
+            gfx_ui_text(g, 30, y, mark, c);
+            gfx_ui_text(g, 90, y, step_names[i], c);
         }
         int pct = s->page == P_DONE ? 100 : s->step * 100 / S_DONE;
         if (s->step == S_COPY && s->nitems) pct = (S_COPY * 100 + 100 * s->done_items / s->nitems) / S_DONE;
@@ -229,7 +229,7 @@ static void paint(window_t *w)
         ui_progress(g, rect_make(24, 250, W - 48, 18), pct);
         ui_sunken(g, rect_make(24, 276, W - 48, 104), RGB(250, 250, 250));
         int first = MAX(0, s->nlog - 6);
-        for (int i = first; i < s->nlog; i++) gfx_text(g, 30, 280 + (i - first) * 16, s->log[i], C_TEXT_DIM, COLOR_NONE);
+        for (int i = first; i < s->nlog; i++) gfx_ui_text(g, 30, 280 + (i - first) * 16, s->log[i], C_TEXT_DIM);
         if (s->page == P_DONE) {
             set_buttons(s, NULL, NULL, "Restart", true);
             s->cancel.id = 4;
@@ -242,8 +242,8 @@ static void paint(window_t *w)
     }
     }
     buttons(w);
-    if (s->page == P_DONE) gfx_text_bold(g, 24, H - 34, "Remove the live disk, then click Restart.", RGB(30, 120, 50));
-    if (s->page == P_FAILED) gfx_text_ellipsis(g, 24, H - 34, s->error, W - 170, RGB(190, 20, 20));
+    if (s->page == P_DONE) gfx_ui_text_bold(g, 24, H - 34, "Remove the live disk, then click Restart.", RGB(30, 120, 50));
+    if (s->page == P_FAILED) gfx_ui_text_ellipsis(g, 24, H - 34, s->error, W - 170, RGB(190, 20, 20));
     wm_invalidate(w);
 }
 

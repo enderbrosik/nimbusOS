@@ -66,6 +66,17 @@ int  gfx_text_scaled(surface_t *s, int x, int y, const char *str, int scale, u32
 void gfx_text_ellipsis(surface_t *s, int x, int y, const char *str, int max_w, u32 fg);
 void gfx_text_centered(surface_t *s, rect_t r, const char *str, u32 fg);
 
+/* UI font: proportional and anti-aliased (derived from the ROM font at boot).
+ * Falls back to the plain monospace font when g_ui_smooth is false.
+ * Editors and the terminal keep using the monospace gfx_text*. */
+extern bool g_ui_smooth;
+int  gfx_ui_text(surface_t *s, int x, int y, const char *str, u32 fg);
+int  gfx_ui_text_bold(surface_t *s, int x, int y, const char *str, u32 fg);
+int  gfx_ui_width(const char *str);
+int  gfx_ui_width_n(const char *str, int n);
+void gfx_ui_text_ellipsis(surface_t *s, int x, int y, const char *str, int max_w, u32 fg);
+void gfx_ui_centered(surface_t *s, rect_t r, const char *str, u32 fg);
+
 u32 color_blend(u32 a, u32 b, int alpha);   /* alpha of b over a, 0..255 */
 u32 color_lighten(u32 c, int amount);
 u32 color_darken(u32 c, int amount);

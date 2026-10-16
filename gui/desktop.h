@@ -4,6 +4,7 @@
 #include "drivers/keyboard.h"
 void desktop_init(void);
 void desktop_refresh(void);
+void desktop_screen_changed(void);   /* resolution changed: rescale + relayout */
 void desktop_draw(surface_t *s);
 void desktop_draw_overlay(surface_t *s);
 void desktop_mouse_down(int x, int y, int button, bool dbl);
@@ -13,4 +14,5 @@ void desktop_key(struct key_event *ke);
 void desktop_tick(void);
 void desktop_set_wallpaper(const char *path, u32 color);
 void wallpaper_chooser_open(void);
+void desktop_drop(const char *path, int x, int y, bool copy);
 #endif

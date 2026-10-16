@@ -120,7 +120,7 @@ static void ib_paint(window_t *w)
     struct inputbox *b = w->app;
     surface_t *s = w->surface;
     gfx_fill_rect(s, 0, 0, s->w, s->h, C_WINDOW_BG);
-    gfx_text(s, 16, 16, b->prompt, C_TEXT, COLOR_NONE);
+    gfx_ui_text(s, 16, 16, b->prompt, C_TEXT);
     tf_draw(s, rect_make(16, 40, s->w - 32, 26), &b->tf, true);
     for (int i = 0; i < 2; i++)
         ui_button(s, b->btn[i].r, b->btn[i].label,
@@ -238,10 +238,10 @@ static void fd_paint(window_t *w)
     struct filedlg *f = w->app;
     surface_t *s = w->surface;
     gfx_fill_rect(s, 0, 0, s->w, s->h, C_WINDOW_BG);
-    gfx_text(s, 12, 12, "Look in:", C_TEXT, COLOR_NONE);
+    gfx_ui_text(s, 12, 12, "Look in:", C_TEXT);
     ui_sunken(s, rect_make(82, 8, s->w - 82 - 50, 24), 0xFFFFFF);
     icon_draw_small(s, ICON_FOLDER, 86, 12);
-    gfx_text_ellipsis(s, 106, 12, f->dir, s->w - 106 - 56, C_TEXT);
+    gfx_ui_text_ellipsis(s, 106, 12, f->dir, s->w - 106 - 56, C_TEXT);
     ui_icon_button(s, f->btn[0].r, ICON_NONE, "Up", f->pressed == 0 ? BTN_PRESSED : f->hover == 0 ? BTN_HOVER : BTN_NORMAL);
     gfx_rect(s, f->btn[0].r.x, f->btn[0].r.y, f->btn[0].r.w, f->btn[0].r.h, C_BUTTON_BORDER);
 
@@ -256,24 +256,24 @@ static void fd_paint(window_t *w)
         bool sel = f->scroll + i == f->sel;
         if (sel) gfx_fill_rect(s, lr.x + 2, y, lr.w - 20, FD_ROW, C_SELECT_LIGHT);
         icon_draw_small(s, icon_for_file(it->name, it->type == NBFS_TYPE_DIR), lr.x + 6, y + 2);
-        gfx_text_ellipsis(s, lr.x + 28, y + 2, it->name, lr.w - 140, C_TEXT);
+        gfx_ui_text_ellipsis(s, lr.x + 28, y + 2, it->name, lr.w - 140, C_TEXT);
         if (it->type != NBFS_TYPE_DIR) {
             char sz[24];
             vfs_format_size(it->size, sz, sizeof sz);
-            gfx_text(s, lr.x + lr.w - 20 - gfx_text_width(sz) - 6, y + 2, sz, C_TEXT_DIM, COLOR_NONE);
+            gfx_ui_text(s, lr.x + lr.w - 20 - gfx_ui_width(sz) - 6, y + 2, sz, C_TEXT_DIM);
         }
     }
-    if (f->n == 0) gfx_text(s, lr.x + 10, lr.y + 8, "(empty folder)", C_TEXT_DIM, COLOR_NONE);
+    if (f->n == 0) gfx_ui_text(s, lr.x + 10, lr.y + 8, "(empty folder)", C_TEXT_DIM);
     s->clip = old;
     ui_vscroll(s, rect_make(lr.x + lr.w - 17, lr.y + 1, 16, lr.h - 2), f->n, rows, f->scroll);
 
     int by = s->h - 78;
-    gfx_text(s, 12, by + 5, "File name:", C_TEXT, COLOR_NONE);
+    gfx_ui_text(s, 12, by + 5, "File name:", C_TEXT);
     tf_draw(s, rect_make(100, by, s->w - 112, 26), &f->name, !f->focus_list);
     if (f->ext[0]) {
         char t[48];
         snprintf(t, sizeof t, "Files of type: *%s", f->ext);
-        gfx_text(s, 100, by + 34, t, C_TEXT_DIM, COLOR_NONE);
+        gfx_ui_text(s, 100, by + 34, t, C_TEXT_DIM);
     }
     for (int i = 1; i < 3; i++)
         ui_button(s, f->btn[i].r, f->btn[i].label,
@@ -354,6 +354,10 @@ static void fd_event(window_t *w, event_t *e)
     int rows = (lr.h - 4) / FD_ROW;
     switch (e->type) {
     case EV_PAINT: fd_paint(w); break;
+    case EV_WHEEL:
+        f->scroll = MAX(0, MIN(MAX(0, f->n - rows), f->scroll + e->wheel * 3));
+        fd_paint(w);
+        break;
     case EV_MOUSE_MOVE: {
         int h = ui_btn_hit(f->btn, 3, e->x, e->y);
         if (h != f->hover) { f->hover = h; fd_paint(w); }

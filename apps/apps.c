@@ -7,15 +7,16 @@
 #include "kernel/kprintf.h"
 
 const struct app_def g_apps[APP_COUNT] = {
-    [APP_EXPLORER]  = { "File Explorer", ICON_EXPLORER, explorer_open },
-    [APP_NOTEPAD]   = { "Notepad", ICON_NOTEPAD, notepad_open },
-    [APP_PAINT]     = { "Paint", ICON_PAINT, paint_open },
-    [APP_TERMINAL]  = { "Terminal", ICON_TERMINAL, terminal_open },
-    [APP_TASKMGR]   = { "Task Manager", ICON_TASKMGR, taskmgr_open },
-    [APP_INSTALLER] = { "Install NimbusOS", ICON_INSTALLER, installer_open },
-    [APP_MINES]     = { "Minesweeper", ICON_MINES, minesweeper_open },
-    [APP_SNAKE]     = { "Snake", ICON_SNAKE, snake_open },
-    [APP_SOLITAIRE] = { "Solitaire", ICON_CARDS, solitaire_open },
+    [APP_EXPLORER]  = { "File Explorer", ICON_EXPLORER, explorer_open, false },
+    [APP_NOTEPAD]   = { "Notepad", ICON_NOTEPAD, notepad_open, false },
+    [APP_PAINT]     = { "Paint", ICON_PAINT, paint_open, false },
+    [APP_TERMINAL]  = { "Terminal", ICON_TERMINAL, terminal_open, false },
+    [APP_TASKMGR]   = { "Task Manager", ICON_TASKMGR, taskmgr_open, false },
+    [APP_INSTALLER] = { "Install NimbusOS", ICON_INSTALLER, installer_open, false },
+    [APP_MINES]     = { "Minesweeper", ICON_MINES, minesweeper_open, false },
+    [APP_SNAKE]     = { "Snake", ICON_SNAKE, snake_open, false },
+    [APP_SOLITAIRE] = { "Solitaire", ICON_CARDS, solitaire_open, false },
+    [APP_SETTINGS]  = { "Settings", ICON_SETTINGS, settings_open, true },
 };
 
 bool system_is_live(void) { return !vfs_exists("/System/installed.txt"); }

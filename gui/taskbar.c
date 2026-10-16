@@ -15,6 +15,7 @@
 #include "kernel/heap.h"
 #include "kernel/pmm.h"
 #include "kernel/string.h"
+#include "kernel/settings.h"
 #include "kernel/kprintf.h"
 #include "drivers/pit.h"
 #include "drivers/fb.h"
@@ -38,9 +39,10 @@ static u32 mem_used_pct;
 enum { SM_APP = 100, SM_PROPS = 200, SM_RESTART, SM_SHUTDOWN };
 enum { WM_RESTORE = 300, WM_MINIMIZE, WM_MAXIMIZE, WM_CLOSE };
 
+/* The RTC keeps UTC; the time zone setting is an offset in minutes. */
 void clock_now(struct rtc_time *t)
 {
-    u32 now = base_time + (u32)((timer_ticks() - base_ticks) / 1000);
+    u32 now = base_time + (u32)((timer_ticks() - base_ticks) / 1000) + settings_get_int("tz_minutes", 0) * 60;
     unix_to_rtc(now, t);
 }
 
@@ -97,7 +99,7 @@ static void draw_start(surface_t *s)
     gfx_fill_rect(s, lx + 8, ly, 6, 6, RGB(120, 220, 80));
     gfx_fill_rect(s, lx, ly + 8, 6, 6, RGB(70, 160, 255));
     gfx_fill_rect(s, lx + 8, ly + 8, 6, 6, RGB(255, 210, 50));
-    gfx_text_bold(s, start_btn.x + 32, start_btn.y + (start_btn.h - 16) / 2, "Start", 0xFFFFFF);
+    gfx_ui_text_bold(s, start_btn.x + 32, start_btn.y + (start_btn.h - 16) / 2, "Start", 0xFFFFFF);
 }
 
 void taskbar_draw(surface_t *s)
@@ -116,7 +118,7 @@ void taskbar_draw(surface_t *s)
         gfx_round_rect(s, r.x, r.y, r.w, r.h, 3, bg);
         if (active) gfx_hline(s, r.x + 3, r.y + r.h - 2, r.w - 6, RGB(90, 170, 255));
         icon_draw_small(s, w->icon, r.x + 6, r.y + (r.h - 16) / 2);
-        gfx_text_ellipsis(s, r.x + 26, r.y + (r.h - 16) / 2, w->title, r.w - 32,
+        gfx_ui_text_ellipsis(s, r.x + 26, r.y + (r.h - 16) / 2, w->title, r.w - 32,
                           w->minimized ? RGB(170, 175, 190) : C_TASKBAR_TEXT);
     }
     /* system tray: disk + memory meter */
@@ -130,11 +132,12 @@ void taskbar_draw(surface_t *s)
     struct rtc_time t;
     clock_now(&t);
     char tbuf[16], dbuf[16];
-    snprintf(tbuf, sizeof tbuf, "%02d:%02d", t.hour, t.minute);
+    if (settings_get_int("clock24", 1)) snprintf(tbuf, sizeof tbuf, "%02d:%02d", t.hour, t.minute);
+    else snprintf(tbuf, sizeof tbuf, "%d:%02d %s", t.hour % 12 ? t.hour % 12 : 12, t.minute, t.hour < 12 ? "AM" : "PM");
     snprintf(dbuf, sizeof dbuf, "%04d-%02d-%02d", t.year, t.month, t.day);
     rect_t cr = rect_make(SCREEN_W - CLOCK_W, bar.y, CLOCK_W, bar.h);
-    gfx_text(s, cr.x + (cr.w - gfx_text_width(tbuf)) / 2, bar.y + 2, tbuf, C_TASKBAR_TEXT, COLOR_NONE);
-    gfx_text(s, cr.x + (cr.w - gfx_text_width(dbuf)) / 2, bar.y + 18, dbuf, RGB(170, 178, 196), COLOR_NONE);
+    gfx_ui_text(s, cr.x + (cr.w - gfx_ui_width(tbuf)) / 2, bar.y + 2, tbuf, C_TASKBAR_TEXT);
+    gfx_ui_text(s, cr.x + (cr.w - gfx_ui_width(dbuf)) / 2, bar.y + 18, dbuf, RGB(170, 178, 196));
 }
 
 static void start_cb(int id, void *ctx)
@@ -241,7 +244,7 @@ static void farewell(const char *msg)
     surface_wrap(&fb, g_fb.pixels, g_fb.width, g_fb.height, g_fb.pitch);
     gfx_gradient_v(&fb, 0, 0, fb.w, fb.h, RGB(0, 70, 140), RGB(0, 30, 70));
     rect_t r = rect_make(0, fb.h / 2 - 20, fb.w, 40);
-    gfx_text_centered(&fb, r, msg, 0xFFFFFF);
+    gfx_ui_centered(&fb, r, msg, 0xFFFFFF);
 }
 
 void system_shutdown(void)
