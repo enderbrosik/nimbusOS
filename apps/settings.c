@@ -8,6 +8,7 @@
  * kernel/settings.c in /System/settings.cfg.
  */
 #include "apps/apps.h"
+#include "gui/dialog.h"
 #include "gui/wm.h"
 #include "gui/widgets.h"
 #include "gui/icons.h"
@@ -48,7 +49,10 @@ static const u32 accents[8] = {
     RGB(0, 120, 215), RGB(16, 124, 16), RGB(194, 57, 52), RGB(135, 100, 184),
     RGB(202, 80, 16), RGB(0, 153, 188), RGB(232, 17, 123), RGB(76, 74, 72),
 };
-static const char *pointer_names[4] = { "Arrow", "Dot", "Ring", "Plus" };
+static const char *pointer_names[5] = { "Arrow", "Dot", "Ring", "Plus", "Image file" };
+#define CUR_BTN_Y 138                    /* the "Choose image..." button, under the style list */
+static void cursor_file_chosen(bool ok, const char *path, void *ctx);
+static void paint(window_t *w);
 static const u32 pointer_fills[6] = { 0xFFFFFF, 0xFFE27A, 0x7FE8FF, 0x9CFF8A, 0xFF9CC8, 0xFFB347 };
 static const int ui_scales[6] = { 75, 100, 125, 150, 175, 200 };
 static const char *scale_names[6] = { "75%", "100%", "125%", "150%", "175%", "200%" };
@@ -76,6 +80,20 @@ static void heading(surface_t *s, rect_t c, const char *t)
 {
     gfx_ui_text_bold(s, c.x, c.y, t, C_TEXT);
     gfx_hline(s, c.x, c.y + 22, c.w, RGB(220, 220, 226));
+}
+
+static void cursor_file_chosen(bool ok, const char *path, void *ctx)
+{
+    window_t *w = ctx;
+    if (!ok || !wm_window_alive(w)) return;
+    if (!wm_set_cursor_file(path)) {
+        msgbox(w, "Pointer", "That file is not a BMP picture of 32 x 32 pixels or smaller.", ICON_ERROR, MB_OK, NULL, NULL);
+        return;
+    }
+    settings_set("cursor_file", path);
+    settings_set_int("cursor_style", 4);
+    wm_set_cursor_look(4, settings_get_int("cursor_scale", 1), (u32)settings_get_int("cursor_fill", 0xFFFFFF));
+    paint(w);
 }
 
 static void paint(window_t *w)
@@ -149,10 +167,11 @@ static void paint(window_t *w)
     case PG_CURSOR: {
         heading(s, c, "Pointer style");
         int style = settings_get_int("cursor_style", 0);
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 5; i++) {
             ui_radio(s, c.x, c.y + 34 + i * ROW, style == i, NULL);
             gfx_ui_text(s, c.x + 22, c.y + 34 + i * ROW, pointer_names[i], C_TEXT);
         }
+        ui_button(s, rect_make(c.x + 200, c.y + CUR_BTN_Y - 2, 150, 24), "Choose image...", BTN_NORMAL);
         heading(s, rect_make(c.x, c.y + 150, c.w, 0), "Size");
         int scale = settings_get_int("cursor_scale", 1);
         for (int i = 0; i < 3; i++) {
@@ -383,8 +402,18 @@ static void on_event(window_t *w, event_t *e)
         case PG_CURSOR: {
             int style = settings_get_int("cursor_style", 0), scale = settings_get_int("cursor_scale", 1);
             u32 fill = (u32)settings_get_int("cursor_fill", 0xFFFFFF);
-            for (int i = 0; i < 4; i++)
-                if (rect_contains(rect_make(c.x, c.y + 34 + i * ROW, 200, 22), e->x, e->y)) style = i;
+            if (rect_contains(rect_make(c.x + 200, c.y + CUR_BTN_Y - 2, 150, 24), e->x, e->y)) {
+                filedialog(w, FD_OPEN, "Choose Pointer Image", "/Pictures", "", ".bmp", cursor_file_chosen, w);
+                return;
+            }
+            for (int i = 0; i < 5; i++)
+                if (rect_contains(rect_make(c.x, c.y + 34 + i * ROW, 200, 22), e->x, e->y)) {
+                    style = i;
+                    if (i == 4 && !settings_get("cursor_file", NULL)) {
+                        filedialog(w, FD_OPEN, "Choose Pointer Image", "/Pictures", "", ".bmp", cursor_file_chosen, w);
+                        return;
+                    }
+                }
             for (int i = 0; i < 3; i++)
                 if (rect_contains(rect_make(c.x, c.y + 184 + i * ROW, 200, 22), e->x, e->y)) scale = i + 1;
             for (int i = 0; i < 6; i++)

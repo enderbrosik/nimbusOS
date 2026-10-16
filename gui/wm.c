@@ -26,6 +26,7 @@
 #include "gui/desktop.h"
 #include "gui/taskbar.h"
 #include "drivers/fb.h"
+#include "gui/bmp.h"
 #include "drivers/mouse.h"
 #include "drivers/pit.h"
 #include "kernel/heap.h"
@@ -76,7 +77,10 @@ static window_t *hover_win;
 static int app_cursor = CURSOR_ARROW, cur_cursor = CURSOR_ARROW;
 static int cursor_x = -100, cursor_y = -100, cursor_drawn_shape;
 static bool cursor_visible;
-#define CSAVE 72                          /* largest cursor (24 px) at 3x */
+#define CSAVE 96                          /* largest cursor (32 px) at 3x */
+#define CUR_IMG_MAX 32
+#define CUR_KEY 0xFF00FF                  /* magenta pixels of an image cursor are see-through */
+static surface_t *cur_img;                 /* custom pointer image, NULL if none */
 static u32 cursor_save[CSAVE * CSAVE];
 static int ptr_style, cur_scale = 1;
 static u32 cur_fill = 0xFFFFFF;
@@ -140,11 +144,21 @@ static int pointer_shape(void)
     return styles[ptr_style & 3];
 }
 
-static rect_t cursor_rect(int shape, int x, int y)
+static bool custom_active(void) { return ptr_style == 4 && cur_img && cur_cursor == CURSOR_ARROW; }
+
+/* Size and hot spot of the pointer that is drawn now, at the current scale. */
+static void cursor_geom(int *w, int *h, int *hx, int *hy)
 {
-    const struct cursor_def *c = &cursors[shape];
-    return rect_intersect(rect_make(x - c->hx * cur_scale, y - c->hy * cur_scale, c->w * cur_scale, c->h * cur_scale),
-                          rect_make(0, 0, screen.w, screen.h));
+    if (custom_active()) { *w = cur_img->w * cur_scale; *h = cur_img->h * cur_scale; *hx = 0; *hy = 0; return; }
+    const struct cursor_def *c = &cursors[pointer_shape()];
+    *w = c->w * cur_scale; *h = c->h * cur_scale; *hx = c->hx * cur_scale; *hy = c->hy * cur_scale;
+}
+
+static rect_t cursor_rect(int x, int y)
+{
+    int w, h, hx, hy;
+    cursor_geom(&w, &h, &hx, &hy);
+    return rect_intersect(rect_make(x - hx, y - hy, w, h), rect_make(0, 0, screen.w, screen.h));
 }
 
 static void cursor_hide(void)
@@ -158,23 +172,34 @@ static void cursor_hide(void)
 
 static void cursor_show(void)
 {
-    int shape = pointer_shape();
-    const struct cursor_def *c = &cursors[shape];
     int px = mx * phys_w / SCREEN_W, py = my * phys_h / SCREEN_H;
-    rect_t r = cursor_rect(shape, px, py);
+    int w, h, hx, hy;
+    cursor_geom(&w, &h, &hx, &hy);
+    rect_t r = cursor_rect(px, py);
     for (int j = 0; j < r.h; j++)            /* save what is underneath */
         memcpy(cursor_save + j * CSAVE, screen.px + (r.y + j) * screen.pitch + r.x, r.w * 4);
     cursor_saved_rect = r;
     int s = cur_scale;
-    int ox = px - c->hx * s, oy = py - c->hy * s;
-    for (int j = 0; j < c->h * s; j++)
-        for (int i = 0; i < c->w * s; i++) {
-            char ch = c->rows[j / s][i / s];
-            int x = ox + i, y = oy + j;
-            if (x < 0 || y < 0 || x >= screen.w || y >= screen.h) continue;
-            if (ch == 'X') screen.px[y * screen.pitch + x] = 0x000000;
-            else if (ch == '#') screen.px[y * screen.pitch + x] = cur_fill;
-        }
+    int ox = px - hx, oy = py - hy;
+    if (custom_active()) {
+        for (int j = 0; j < h; j++)
+            for (int i = 0; i < w; i++) {
+                int x = ox + i, y = oy + j;
+                u32 c = cur_img->px[(j / s) * cur_img->pitch + i / s];
+                if (x < 0 || y < 0 || x >= screen.w || y >= screen.h || c == CUR_KEY) continue;
+                screen.px[y * screen.pitch + x] = c;
+            }
+    } else {
+        const struct cursor_def *c = &cursors[pointer_shape()];
+        for (int j = 0; j < h; j++)
+            for (int i = 0; i < w; i++) {
+                char ch = c->rows[j / s][i / s];
+                int x = ox + i, y = oy + j;
+                if (x < 0 || y < 0 || x >= screen.w || y >= screen.h) continue;
+                if (ch == 'X') screen.px[y * screen.pitch + x] = 0x000000;
+                else if (ch == '#') screen.px[y * screen.pitch + x] = cur_fill;
+            }
+    }
     cursor_x = mx; cursor_y = my; cursor_drawn_shape = cur_cursor;
     cursor_visible = true;
 }
@@ -1062,10 +1087,25 @@ void wm_set_ui_scale(int pct)
 
 int wm_ui_scale(void) { return ui_pct; }
 
+/* Use an image file (BMP, up to 32x32, magenta is transparent) as the pointer. */
+bool wm_set_cursor_file(const char *path)
+{
+    surface_t *img = bmp_load(path);
+    if (!img) return false;
+    if (img->w > CUR_IMG_MAX || img->h > CUR_IMG_MAX) { surface_destroy(img); return false; }
+    cursor_hide();
+    surface_destroy(cur_img);
+    cur_img = img;
+    cursor_drawn_shape = -1;
+    cursor_x = -100;
+    klog("[wm  ] pointer image %s (%dx%d)\n", path, img->w, img->h);
+    return true;
+}
+
 void wm_set_cursor_look(int style, int scale, u32 fill)
 {
     cursor_hide();
-    ptr_style = style & 3;
+    ptr_style = style % 5;
     cur_scale = scale < 1 ? 1 : scale > 3 ? 3 : scale;
     cur_fill = fill;
     cursor_drawn_shape = -1;                /* make the next frame redraw the pointer */
@@ -1085,6 +1125,8 @@ void wm_init(void)
     mouse_get(&x, &y, &b);
     mx = x; my = y;
     mouse_set_speed(settings_get_int("mouse_speed", 4));
+    const char *cfile = settings_get("cursor_file", NULL);
+    if (cfile && settings_get_int("cursor_style", 0) == 4) wm_set_cursor_file(cfile);
     wm_set_cursor_look(settings_get_int("cursor_style", 0), settings_get_int("cursor_scale", 1),
                        (u32)settings_get_int("cursor_fill", 0xFFFFFF));
     g_ui_smooth = settings_get_int("smooth_fonts", 1);
