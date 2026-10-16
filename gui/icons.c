@@ -271,6 +271,7 @@ int icon_for_file(const char *name, bool is_dir)
             return ICON_FILE_TEXT;
         if (!strcasecmp(dot, ".bmp")) return ICON_FILE_IMAGE;
         if (!strcasecmp(dot, ".wav")) return ICON_AUDIO;
+        if (!strcasecmp(dot, ".elf")) return ICON_TERMINAL;
     }
     return ICON_FILE;
 }

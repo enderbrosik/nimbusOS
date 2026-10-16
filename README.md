@@ -119,6 +119,7 @@ apps/          explorer, notepad, paint, terminal, taskmgr, sysprops, settings, 
                solitaire, mediaplayer, web browser, app registry
 net/           TCP/IP stack (net.c) and background network jobs (netjob.c)
 installer/     graphical installer
+user/          user-mode C library (lib/), headers (include/), sample programs (programs/), linker script
 tools/         mkimage, nfstool (formatter + file tool), fstest (FS test suite), mkwallpaper,
                qemu_harness.py + test_stage1..7.py (headless QEMU tests)
 rootfs/        files copied into the system volume at build time
@@ -404,6 +405,53 @@ make run-target           # boot the freshly installed disk on its own
 
 ![done](docs/screenshots/stage7-done.png)
 
+## User mode: programs, system calls, libc
+
+NimbusOS runs **user programs in ring 3**, each in its own address space.
+The samples live in `/Programs` (sources in `/Programs/Source`); type their
+name in the Terminal, or double-click a `.elf` file in File Explorer:
+
+| Program | Shows |
+|---|---|
+| `hello [args]` | argv, getpid, printf |
+| `primes [n]` | sieve on `calloc`'ed memory (heap grows with `sbrk`) |
+| `guess` | reading lines from the Terminal (stdin) |
+| `mandel [w] [h]` | fixed-point Mandelbrot set, CPU bound |
+| `spin [s]` | pure ring 3 busy loop: the desktop stays responsive, Ctrl+C stops it |
+| `wc <file>...` | reading files through system calls |
+| `todo [add <text> / done <n> / clear]` | writing `/Documents/todo.txt` |
+| `sysinfo` | `SYS_SYSINFO` / `SYS_TIME` |
+| `crash null / kernel / div / cli / stack` | a faulting program is terminated with a report; nothing else is affected |
+
+**How it works**
+* `kernel/proc.c` loads a static **ELF64** executable (`PT_LOAD` segments)
+  into a fresh PML4 whose user half starts at `0x80_0000_0000`; kernel pages
+  are shared but supervisor-only. argc/argv go on a 256 KiB user stack.
+* The process is a kernel task that enters ring 3 by `iretq` through a
+  hand-built frame (user CS/SS selectors from the GDT). The scheduler loads
+  each task's CR3 and points `TSS.RSP0` at its kernel stack.
+* **System calls** use `int 0x80` (a DPL-3 gate): RAX = number, arguments in
+  RDI, RSI, RDX, R10, R8; numbers in `user/include/syscalls.h`. Calls run with
+  interrupts enabled and may sleep. User pointers are checked against the
+  process's page tables before use.
+* Console I/O goes through ring buffers polled by the Terminal. File system
+  calls are proxied to the GUI task (the only task that touches NimbusFS)
+  through a bounce buffer.
+* CPU exceptions from ring 3 end only that process (`Program terminated:
+  Page Fault at address ...`). A killed process ends on its next return to
+  ring 3, even if it never makes a system call. Its address space is freed
+  by the idle task.
+
+**libc** (`user/lib`, written from scratch): `crt0`, syscall wrappers,
+`printf` family, `puts/putchar/getchar/fgets`, `malloc/calloc/realloc/free`
+(first fit with coalescing on `sbrk`), `string.h`, `ctype.h`, `strtol/atoi`,
+`rand`, `qsort`, `exit`, plus `<nimbus.h>` for `readfile`, `writefile`,
+`listdir`, `sleep_ms`, `ticks_ms`, `gettime`, `sysinfo`. Programs are built
+with `-mcmodel=large` (they live above 4 GiB) and no SSE.
+
+**Writing a program:** put `myprog.c` in `user/programs/` and run `make`. It
+is built, linked with `user/linker.ld` and installed as `/Programs/myprog.elf`.
+
 ## Beyond the stages: games, polish, sound, networking
 
 **Games** (Start menu ▸ Games, and on the desktop): Minesweeper (three
@@ -460,10 +508,10 @@ address bar). Only `http://` is supported – there is no TLS.
 * **Identity-mapped kernel** instead of a higher-half kernel: simpler to boot.
   The VMM still provides a real virtual map: NULL guard, heap and framebuffer
   windows, per-process user address spaces.
-* **Kernel threads only (ring 0):** apps are event handlers inside the
+* **GUI apps are kernel code:** the built-in apps are event handlers inside the
   "desktop" task, much like a classic single-threaded GUI toolkit. That keeps
-  the window manager lock-free. Preemption is real (the scheduler and the
-  `sysmon` task demonstrate it), but there is no user mode or ELF loader.
+  the window manager lock-free. Separately compiled programs run in ring 3
+  (see "User mode"); they talk to the Terminal, not to windows.
 * **Font:** taken from the VGA ROM at boot rather than embedded, so no
   third-party font data is in the repository.
 * **Damage-based compositing:** apps that update a lot (Paint, Terminal)
@@ -473,6 +521,8 @@ address bar). Only `http://` is supported – there is no TLS.
 ## Known limitations
 
 * No USB, no TLS/HTTPS, TCP is client-only.
+* User programs are console programs: no GUI API, no fork/exec from user
+  space, no FPU/SSE in user mode, whole-file I/O only.
 * LBA28 ATA PIO only (disks up to 128 GiB); no AHCI.
 * Single CPU; the file system is used only from the GUI task.
 * Needs a Bochs-VBE-compatible display adapter (`-vga std`).

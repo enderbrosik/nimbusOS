@@ -14,6 +14,7 @@
 #include "kernel/vmm.h"
 #include "kernel/heap.h"
 #include "kernel/task.h"
+#include "kernel/proc.h"
 #include "kernel/selftest.h"
 #include "kernel/power.h"
 #include "gui/wm.h"
@@ -100,6 +101,7 @@ void kmain(struct bootinfo *bi)
     heap_init();
     pit_init();
     tasking_init();
+    syscall_init();
     selftest_core();
     vga_setcolor(VGA_LGREEN, VGA_BLACK);
     kprintf("Core kernel OK.\n");

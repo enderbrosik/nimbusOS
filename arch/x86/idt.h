@@ -27,4 +27,6 @@ extern uptr (*sched_hook)(uptr sp, int voluntary);
  * return a different stack pointer like sched_hook. */
 extern uptr (*syscall_hook)(struct regs *r);
 extern uptr (*user_fault_hook)(struct regs *r, const char *what);
+/* Called just before returning to ring 3 (may not return). */
+extern void (*user_return_hook)(struct regs *r);
 #endif

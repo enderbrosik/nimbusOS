@@ -35,7 +35,7 @@ static void paint(window_t *w)
     gfx_ui_text_bold(s, 66, 18, "NimbusOS 1.0", 0xFFFFFF);
     gfx_ui_text(s, 66, 38, "A hobby operating system, written from scratch", RGB(220, 235, 255));
     int y = 86;
-    line(s, y, "Processor", "x86, 32-bit protected mode"); y += 22;
+    line(s, y, "Processor", "x86-64, 64-bit long mode"); y += 22;
     snprintf(b, sizeof b, "%u MiB (%u MiB free)", pmm_total_frames() / 256, pmm_free_frames() / 256);
     line(s, y, "Memory", b); y += 22;
     struct heap_stats hs;

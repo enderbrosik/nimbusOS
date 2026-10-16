@@ -43,6 +43,35 @@ KASMS   := arch/x86/entry.asm arch/x86/isr.asm
 KOBJS   := $(patsubst %.asm,$(BUILD)/%.o,$(KASMS)) $(patsubst %.c,$(BUILD)/%.o,$(KSRCS))
 DEPS    := $(KOBJS:.o=.d)
 
+# ---- user programs (ring 3): libc + sample programs in user/ -------------
+UCFLAGS := $(TARGET_FLAG) -std=gnu11 -ffreestanding -fno-builtin -nostdlib -nostdinc \
+           -fno-stack-protector -fno-pic -mcmodel=large -mno-sse -mno-sse2 -mno-mmx -mno-80387 \
+           -ffunction-sections -fdata-sections -O2 -g -Wall -Wextra -Iuser/include
+ULIB_SRCS := $(wildcard user/lib/*.c)
+ULIB_OBJS := $(BUILD)/user/lib/crt0.o $(patsubst %.c,$(BUILD)/%.o,$(ULIB_SRCS))
+UPROGS    := $(patsubst user/programs/%.c,%,$(wildcard user/programs/*.c))
+USERROOT  := $(BUILD)/userroot
+UBINS     := $(patsubst %,$(USERROOT)/Programs/%.elf,$(UPROGS))
+USRCS     := $(patsubst %,$(USERROOT)/Programs/Source/%.c,$(UPROGS))
+
+$(BUILD)/user/%.o: user/%.c $(wildcard user/include/*.h)
+	@mkdir -p $(dir $@)
+	$(KCC) $(UCFLAGS) -c $< -o $@
+
+$(BUILD)/user/lib/crt0.o: user/lib/crt0.asm
+	@mkdir -p $(dir $@)
+	$(NASM) -f elf64 $< -o $@
+
+$(USERROOT)/Programs/%.elf: $(BUILD)/user/programs/%.o $(ULIB_OBJS) user/linker.ld
+	@mkdir -p $(dir $@)
+	$(KLD) -m elf_x86_64 -z max-page-size=4096 --gc-sections --strip-debug -T user/linker.ld -nostdlib -o $@ $< $(ULIB_OBJS)
+
+$(USERROOT)/Programs/Source/%.c: user/programs/%.c
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+programs: $(UBINS) $(USRCS)
+
 MBR     := $(BUILD)/boot/mbr.bin
 STAGE2  := $(BUILD)/boot/stage2.bin
 KELF    := $(BUILD)/kernel.elf
@@ -56,7 +85,7 @@ QEMU_SND := -audiodev $(AUDIO),id=snd0 -device AC97,audiodev=snd0 -nic user,mode
 QEMU_COMMON := -m 256M -vga std $(QEMU_SND) -drive file=$(IMG),format=raw,index=0,media=disk
 QEMU_EXTRA  ?=
 
-.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso
+.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso programs
 all: build
 build: $(IMG)
 
@@ -110,11 +139,12 @@ $(GENROOT)/.stamp: $(MKWALL)
 
 # The disk image: boot code + kernel, then a NimbusFS partition populated
 # from rootfs/ (hand-written files) and $(GENROOT) (generated pictures).
-$(IMG): $(MBR) $(STAGE2) $(KBIN) $(KELF) $(MKIMAGE) $(NFSTOOL) $(GENROOT)/.stamp $(ROOTFS_FILES)
+$(IMG): $(MBR) $(STAGE2) $(KBIN) $(KELF) $(MKIMAGE) $(NFSTOOL) $(GENROOT)/.stamp $(ROOTFS_FILES) $(UBINS) $(USRCS)
 	$(MKIMAGE) $@ $(IMG_MB) $(MBR) $(STAGE2) $(KBIN)
 	$(NFSTOOL) format $@ NIMBUS
 	$(NFSTOOL) import $@ rootfs /
 	$(NFSTOOL) import $@ $(GENROOT) /
+	$(NFSTOOL) import $@ $(USERROOT) /
 
 # ---- live CD --------------------------------------------------------------
 # The ISO embeds a 32 MiB copy of the disk image flagged --ramdisk: the
@@ -128,11 +158,12 @@ $(MKISO): tools/mkiso.c
 	@mkdir -p $(dir $@)
 	$(HOSTCC) $(HOSTCFLAGS) $< -o $@
 
-$(CDIMG): $(MBR) $(STAGE2) $(KBIN) $(MKIMAGE) $(NFSTOOL) $(GENROOT)/.stamp $(ROOTFS_FILES)
+$(CDIMG): $(MBR) $(STAGE2) $(KBIN) $(MKIMAGE) $(NFSTOOL) $(GENROOT)/.stamp $(ROOTFS_FILES) $(UBINS) $(USRCS)
 	$(MKIMAGE) $@ 32 $(MBR) $(STAGE2) $(KBIN) --ramdisk
 	$(NFSTOOL) format $@ NIMBUS
 	$(NFSTOOL) import $@ rootfs /
 	$(NFSTOOL) import $@ $(GENROOT) /
+	$(NFSTOOL) import $@ $(USERROOT) /
 
 iso: $(ISO)
 $(ISO): $(CDIMG) $(MKISO)
@@ -182,6 +213,7 @@ test-all: test $(IMG)
 	python3 tools/test_sound.py
 	python3 tools/test_iso.py
 	python3 tools/test_net.py
+	python3 tools/test_user.py
 
 clean:
 	rm -rf $(BUILD)

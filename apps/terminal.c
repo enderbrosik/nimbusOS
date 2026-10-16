@@ -24,6 +24,7 @@
 #include "kernel/sound.h"
 #include "kernel/settings.h"
 #include "net/netjob.h"
+#include "kernel/proc.h"
 
 #define SCROLLBACK 500
 #define MAXCOL 160
@@ -53,6 +54,7 @@ struct term {
     int cols;
     bool nl_pending;
     struct netjob *job;          /* running network command */
+    struct proc *proc;           /* running user program */
 };
 
 static window_t *cur_win;        /* terminal executing a command (for out()) */
@@ -123,12 +125,26 @@ static void paint(window_t *w)
     /* the prompt line is the last row */
     char prompt[NBFS_PATH_MAX + 16];
     snprintf(prompt, sizeof prompt, "nimbus:%s$ ", t->cwd);
-    int total = t->count + (t->job ? 0 : 1);   /* no prompt while a command runs */
+    /* No prompt while a command runs; a running program's input is typed
+     * at the end of its last output line, like on a real terminal. */
+    bool extra = t->proc ? (t->nl_pending || !t->count) : !t->job;
+    int total = t->count + (extra ? 1 : 0);
     int first = MAX(0, total - rows - t->view);
     for (int r = 0; r < rows && first + r < total; r++) {
         int idx = first + r;
         int y = PAD + r * FONT_H;
-        if (idx < t->count) {
+        if (t->proc && idx == total - 1) {
+            int x = PAD;
+            if (idx < t->count) {
+                struct line *l = line_at(t, idx);
+                x += gfx_text(s, x, y, l->text, l->color, COLOR_NONE);
+            }
+            int avail = MAX(1, (s->w - x - PAD - 16) / FONT_W);
+            int start = MAX(0, t->input.cursor - avail + 1);
+            gfx_text_n(s, x, y, t->input.text + start, avail, RGB(240, 240, 240), COLOR_NONE);
+            if (t->blink && w == wm_focused())
+                gfx_fill_rect(s, x + (t->input.cursor - start) * FONT_W, y + 13, FONT_W, 3, RGB(240, 240, 240));
+        } else if (idx < t->count) {
             struct line *l = line_at(t, idx);
             gfx_text(s, PAD, y, l->text, l->color, COLOR_NONE);
         } else {
@@ -214,6 +230,10 @@ static void cmd_help(struct term *t, int argc, char **argv)
         "  ping <host> [n]     ICMP echo;  nslookup <name>   DNS lookup",
         "  wget <url> [file]   download over HTTP;  http <url>  print a page",
         "  history / exit / shutdown / reboot / uname",
+        "",
+        "Programs: any ELF64 executable runs as a user-mode process, e.g. the",
+        "samples in /Programs: hello, primes, guess, mandel, wc, todo, sysinfo,",
+        "crash.  Type a program's name (or a path); Ctrl+C stops it.",
     };
     for (unsigned i = 0; i < ARRAY_SIZE(h); i++) out(C_FG, "%s\n", h[i]);
 }
@@ -500,7 +520,7 @@ static void cmd_volume(struct term *t, int argc, char **argv)
         sound_available() ? "AC'97 sound card" : "no sound card");
 }
 
-static void cmd_uname(struct term *t, int argc, char **argv) { out(C_FG, "NimbusOS 1.0 i686 (32-bit protected mode)\n"); }
+static void cmd_uname(struct term *t, int argc, char **argv) { out(C_FG, "NimbusOS 0.2 x86_64 (64-bit long mode)\n"); }
 static void cmd_pwd(struct term *t, int argc, char **argv) { out(C_FG, "%s\n", t->cwd); }
 
 static const struct { const char *name; void (*fn)(struct term *, int, char **); } commands[] = {
@@ -512,6 +532,74 @@ static const struct { const char *name; void (*fn)(struct term *, int, char **);
     { "history", cmd_history }, { "uname", cmd_uname }, { "play", cmd_play }, { "beep", cmd_beep },
     { "volume", cmd_volume },
 };
+
+/* Find an executable: a path, or NAME / NAME.elf in the current directory
+ * or in /Programs. */
+static bool find_program(struct term *t, const char *name, char *out_path)
+{
+    char cand[NBFS_PATH_MAX], file[NBFS_NAME_MAX + 8];
+    const char *dirs[2] = { t->cwd, "/Programs" };
+    if (strchr(name, '/')) {
+        abs_path(t, name, out_path);
+        return vfs_exists(out_path) && !vfs_is_dir(out_path);
+    }
+    for (int d = 0; d < 2; d++) {
+        for (int e = 0; e < 2; e++) {
+            snprintf(file, sizeof file, "%s%s", name, e ? ".elf" : "");
+            nbfs_path_join(dirs[d], file, cand, sizeof cand);
+            const char *dot = strrchr(cand, '.');
+            if (!dot || strcasecmp(dot, ".elf")) continue;   /* only .elf files run */
+            if (vfs_exists(cand) && !vfs_is_dir(cand)) { strlcpy(out_path, cand, NBFS_PATH_MAX); return true; }
+        }
+    }
+    return false;
+}
+
+static bool run_program(window_t *w, int argc, char **argv)
+{
+    struct term *t = w->app;
+    char path[NBFS_PATH_MAX];
+    if (!find_program(t, argv[0], path)) return false;
+    char *data;
+    u32 len;
+    int r = vfs_read_all(path, &data, &len);
+    if (r) { err(argv[0], path, r); return true; }
+    const char *why;
+    t->proc = proc_spawn((const u8 *)data, len, argc, argv, t->cwd, &why);
+    kfree(data);
+    if (!t->proc) { out(C_ERR, "%s: %s\n", argv[0], why); return true; }
+    wm_set_timer(w, 20);                       /* drain output / serve file requests */
+    return true;
+}
+
+/* Called on the Terminal's timer while a program runs. */
+static void poll_program(window_t *w)
+{
+    struct term *t = w->app;
+    while (proc_service(t->proc)) {}
+    char buf[1025];
+    u32 n, total = 0;
+    while (total < 16384 && (n = proc_read_output(t->proc, buf, sizeof buf - 1)) > 0) {
+        buf[n] = 0;
+        /* drop characters the terminal cannot show */
+        for (u32 i = 0; i < n; i++) if ((u8)buf[i] < 32 && buf[i] != '\n' && buf[i] != '\t') buf[i] = '?';
+        emit(t, buf, C_FG);
+        klog("[out ] %s", buf);              /* program output also goes to the serial log */
+        total += n;
+    }
+    if (proc_finished(t->proc)) {
+        const char *fault = proc_fault(t->proc);
+        int code = proc_exit_code(t->proc);
+        if (t->count && !t->nl_pending) emit(t, "\n", C_FG);
+        if (fault) out(C_ERR, "Program terminated: %s\n", fault);
+        else if (code == 130) out(C_ERR, "Program stopped.\n");
+        else if (code) out(C_ERR, "[exit code %d]\n", code);
+        klog("[term] program pid %d finished\n", proc_pid(t->proc));
+        proc_release(t->proc);
+        t->proc = NULL;
+        wm_set_timer(w, 530);
+    }
+}
 
 static void execute(window_t *w, const char *cmdline)
 {
@@ -580,6 +668,7 @@ static void execute(window_t *w, const char *cmdline)
         wm_set_timer(w, 50);                   /* drain its output quickly */
         return;
     }
+    if (run_program(w, argc, argv)) return;
     out(C_ERR, "%s: command not found (try 'help')\n", argv[0]);
 }
 
@@ -613,6 +702,12 @@ static void on_event(window_t *w, event_t *ev)
     case EV_RESIZE: t->cols = term_cols(w); break;
     case EV_FOCUS: case EV_BLUR: paint(w); break;
     case EV_TIMER:
+        if (t->proc) {
+            cur_win = w;
+            poll_program(w);
+            paint(w);
+            break;
+        }
         if (t->job) {
             char line[256];
             bool is_err;
@@ -647,6 +742,27 @@ static void on_event(window_t *w, event_t *ev)
         struct key_event *k = &ev->key;
         if (!k->pressed) break;
         t->blink = true;
+        if (t->proc) { cur_win = w; poll_program(w); }   /* it may have just ended */
+        if (t->proc) {                        /* typing goes to the running program */
+            cur_win = w;
+            if ((k->mods & MOD_CTRL) && k->key == 'c') {
+                out(C_ERR, "^C\n");
+                proc_kill(t->proc);
+            } else if (k->key == KEY_ENTER) {
+                char line[260];
+                int n = snprintf(line, sizeof line, "%s\n", t->input.text);
+                emit(t, line, RGB(240, 240, 240));
+                proc_send_input(t->proc, line, n);
+                tf_set(&t->input, "");
+            } else {
+                t->input.sel = t->input.cursor;
+                tf_key(&t->input, k);
+                t->input.sel = t->input.cursor;
+            }
+            t->view = 0;
+            paint(w);
+            break;
+        }
         if (t->job) {                         /* only Ctrl+C while a network command runs */
             if ((k->mods & MOD_CTRL) && k->key == 'c') { netjob_cancel(t->job); cur_win = w; out(C_ERR, "^C\n"); }
             break;
@@ -686,20 +802,21 @@ static void on_event(window_t *w, event_t *ev)
     case EV_CLOSE: wm_destroy_window(w); break;
     case EV_DESTROY:
         if (t->job) { netjob_cancel(t->job); netjob_release(t->job); }
+        if (t->proc) proc_release(t->proc);
         kfree(t->lines); kfree(t->capture); kfree(t);
         break;
     }
 }
 
-void terminal_open(const char *cwd)
+static window_t *open_term(const char *cwd)
 {
     struct term *t = kzalloc(sizeof *t);
-    if (!t) return;
+    if (!t) return NULL;
     t->lines = kzalloc(SCROLLBACK * sizeof(struct line));
     strlcpy(t->cwd, cwd && vfs_is_dir(cwd) ? cwd : "/", sizeof t->cwd);
     t->cols = 80;
     window_t *w = wm_create("Terminal", ICON_TERMINAL, 660, 400, WF_RESIZABLE, on_event, t);
-    if (!w) { kfree(t->lines); kfree(t); return; }
+    if (!w) { kfree(t->lines); kfree(t); return NULL; }
     w->min_w = 300;
     w->min_h = 120;
     t->cols = term_cols(w);
@@ -710,4 +827,23 @@ void terminal_open(const char *cwd)
     t->input.sel = 0;
     paint(w);
     wm_set_timer(w, 530);
+    return w;
+}
+
+void terminal_open(const char *cwd) { open_term(cwd); }
+
+/* Open a Terminal in the program's folder and run it (Explorer / desktop
+ * double-click on a .elf file). */
+void terminal_run(const char *path)
+{
+    char dir[NBFS_PATH_MAX], cmd[NBFS_PATH_MAX + 4];
+    strlcpy(dir, path, sizeof dir);
+    char *slash = strrchr(dir, '/');
+    if (slash) *(slash == dir ? slash + 1 : slash) = 0;
+    window_t *w = open_term(dir);
+    if (!w) return;
+    struct term *t = w->app;
+    snprintf(cmd, sizeof cmd, "\"%s\"", path);
+    tf_set(&t->input, cmd);
+    submit(w);
 }

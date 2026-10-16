@@ -20,6 +20,8 @@
 #include "arch/x86/io.h"
 #include "arch/x86/gdt.h"
 #include "drivers/pit.h"
+#include "kernel/vmm.h"
+#include "kernel/proc.h"
 
 #define QUANTUM 10
 #define STACK_SIZE (32 * 1024)
@@ -51,6 +53,16 @@ static void update_cpu_stats(void)
     window_start = now;
 }
 
+/* Make `t` the running task: its address space and its kernel stack for
+ * interrupts arriving from ring 3. */
+static uptr switch_to(struct task *t)
+{
+    current = t;
+    vmm_space_switch(t->space);
+    if (t->kstack_top) tss_set_kernel_stack(t->kstack_top);
+    return t->sp;
+}
+
 static uptr schedule(uptr sp, int voluntary)
 {
     current->sp = sp;
@@ -66,11 +78,10 @@ static uptr schedule(uptr sp, int voluntary)
     do {
         t = t->next;
         if (t->state == TASK_SLEEPING && now >= t->wake_tick) t->state = TASK_READY;
-        if (t->state == TASK_READY && t != idle_task) { current = t; return t->sp; }
+        if (t->state == TASK_READY && t != idle_task) return switch_to(t);
     } while (t != current);
     if (current->state == TASK_READY && current != idle_task) return current->sp;
-    current = idle_task;
-    return idle_task->sp;
+    return switch_to(idle_task);
 }
 
 /* Idle task: halts the CPU and reaps dead tasks. */
@@ -82,6 +93,7 @@ static void idle_main(void *arg)
         for (struct task *t = current->next; t != current; t = prev->next) {
             if (t->state == TASK_DEAD && t != current) {
                 prev->next = t->next;
+                if (t->proc) proc_task_reaped(t->proc);
                 kfree(t->stack);
                 kfree(t);
                 continue;
@@ -136,6 +148,7 @@ struct task *task_create_ex(const char *name, void (*entry)(void *), void *arg, 
     r->rsp = top - 8;
     r->ss = KERNEL_DS;
     t->sp = (uptr)r;
+    t->kstack_top = top;
 
     u32 f = irq_save();
     t->id = next_id++;

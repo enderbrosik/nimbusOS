@@ -18,6 +18,10 @@ struct task {
     void (*entry)(void *);
     void *arg;
     struct task *next;
+    /* user processes (kernel/proc.c); 0 / NULL for kernel threads */
+    u64 space;               /* address space (PML4 physical address) */
+    uptr kstack_top;         /* loaded into TSS.RSP0 while this task runs */
+    struct proc *proc;
 };
 
 void tasking_init(void);

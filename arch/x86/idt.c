@@ -36,6 +36,7 @@ extern u64 isr_table[256];
 uptr (*sched_hook)(uptr sp, int voluntary);
 uptr (*syscall_hook)(struct regs *r);
 uptr (*user_fault_hook)(struct regs *r, const char *what);
+void (*user_return_hook)(struct regs *r);
 
 static const char *exc_names[32] = {
     "Divide Error", "Debug", "NMI", "Breakpoint", "Overflow", "BOUND Range Exceeded",
@@ -135,5 +136,6 @@ uptr isr_dispatch(struct regs *r)
     } else if (r->int_no == SYSCALL_VECTOR) {
         if (syscall_hook) esp = syscall_hook(r);
     }
+    if ((((struct regs *)esp)->cs & 3) && user_return_hook) user_return_hook((struct regs *)esp);
     return esp;
 }

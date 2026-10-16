@@ -23,6 +23,7 @@ void explorer_open(const char *path);
 void notepad_open(const char *path);
 void paint_open(const char *path);
 void terminal_open(const char *cwd);
+void terminal_run(const char *path);       /* run a .elf program in a new Terminal */
 void taskmgr_open(const char *unused);
 void installer_open(const char *unused);
 void minesweeper_open(const char *arg);

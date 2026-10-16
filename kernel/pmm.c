@@ -1,6 +1,6 @@
 /*
  * NimbusOS - physical memory manager: one bit per 4 KiB frame over the full
- * 32-bit physical address space (1 Mi frames -> 128 KiB bitmap in .bss).
+ * low 4 GiB of physical memory (1 Mi frames -> 128 KiB bitmap in .bss).
  * A set bit means "used / not RAM".  Usable RAM comes from the BIOS E820 map
  * (OSDev wiki "Detecting Memory (x86)", "Page Frame Allocation").
  */
