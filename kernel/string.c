@@ -70,6 +70,13 @@ int strcasecmp(const char *a, const char *b)
     return tolower((u8)*a) - tolower((u8)*b);
 }
 
+int strncasecmp(const char *a, const char *b, size_t n)
+{
+    while (n && *a && tolower(*a) == tolower(*b)) { a++; b++; n--; }
+    if (!n) return 0;
+    return tolower((u8)*a) - tolower((u8)*b);
+}
+
 char *strcpy(char *d, const char *s) { char *r = d; while ((*d++ = *s++)) {} return r; }
 
 char *strncpy(char *d, const char *s, size_t n)

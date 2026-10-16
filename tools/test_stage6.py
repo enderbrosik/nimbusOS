@@ -78,7 +78,7 @@ with Qemu([IMG], name="stage6") as q:
     time.sleep(2.2)
     q.screenshot(f"{S}/stage6-taskmgr.png")
     tx, ty = 232, 99
-    q.click(tx + 100, ty + 206 + 10)          # first app row (5 kernel tasks incl. audio)
+    q.click(tx + 100, ty + 226 + 10)          # first app row (6 kernel tasks incl. audio, net)
     q.click(tx + 448 + 50, ty + 522 + 14)
     q.wait_serial(r'end task "File Explorer', 5)
     log = q.serial()

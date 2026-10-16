@@ -36,7 +36,7 @@ CFLAGS  := $(TARGET_FLAG) -std=gnu11 -ffreestanding -fno-builtin -nostdlib -nost
 LDFLAGS := -m elf_i386 -T arch/x86/linker.ld -nostdlib
 HOSTCFLAGS := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -I.
 
-KDIRS   := kernel arch/x86 drivers fs gui apps installer
+KDIRS   := kernel arch/x86 drivers fs gui apps installer net
 KSRCS   := $(foreach d,$(KDIRS),$(wildcard $(d)/*.c))
 KASMS   := arch/x86/entry.asm arch/x86/isr.asm
 KOBJS   := $(patsubst %.asm,$(BUILD)/%.o,$(KASMS)) $(patsubst %.c,$(BUILD)/%.o,$(KSRCS))
@@ -51,7 +51,7 @@ MKIMAGE := $(BUILD)/tools/mkimage
 # Sound: AC'97 card. Host backend: CoreAudio on macOS, silent elsewhere
 # (pick one with e.g. `make run AUDIO=pa` / `AUDIO=alsa` / `AUDIO=sdl`).
 AUDIO   ?= $(if $(filter Darwin,$(shell uname -s)),coreaudio,none)
-QEMU_SND := -audiodev $(AUDIO),id=snd0 -device AC97,audiodev=snd0
+QEMU_SND := -audiodev $(AUDIO),id=snd0 -device AC97,audiodev=snd0 -nic user,model=e1000
 QEMU_COMMON := -m 256M -vga std $(QEMU_SND) -drive file=$(IMG),format=raw,index=0,media=disk
 QEMU_EXTRA  ?=
 
@@ -180,6 +180,7 @@ test-all: test $(IMG)
 	python3 tools/test_polish.py
 	python3 tools/test_sound.py
 	python3 tools/test_iso.py
+	python3 tools/test_net.py
 
 clean:
 	rm -rf $(BUILD)

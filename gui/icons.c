@@ -190,6 +190,22 @@ static void draw_icon(surface_t *s, int id)
             gfx_thick_line(s, 29, 11, 21, 21, 1, RGB(240, 80, 70));
         }
         break;
+    case ICON_WEB:
+        gfx_fill_circle(s, 16, 16, 13, RGB(40, 120, 210));
+        gfx_circle(s, 16, 16, 13, RGB(20, 70, 150));
+        for (int i = -1; i <= 1; i++) gfx_hline(s, 4, 16 + i * 6, 25, RGB(170, 210, 255));
+        gfx_vline(s, 16, 3, 27, RGB(170, 210, 255));
+        gfx_circle(s, 16, 16, 6, RGB(170, 210, 255));
+        gfx_fill_rect(s, 7, 8, 7, 5, RGB(80, 180, 90));
+        gfx_fill_rect(s, 18, 18, 8, 6, RGB(80, 180, 90));
+        break;
+    case ICON_NETWORK:
+        gfx_round_rect(s, 3, 3, 14, 11, 2, RGB(50, 54, 64));
+        gfx_fill_rect(s, 5, 5, 10, 7, RGB(60, 140, 230));
+        gfx_round_rect(s, 15, 15, 14, 11, 2, RGB(50, 54, 64));
+        gfx_fill_rect(s, 17, 17, 10, 7, RGB(60, 140, 230));
+        gfx_line(s, 10, 14, 10, 20, RGB(90, 90, 100)); gfx_line(s, 10, 20, 15, 20, RGB(90, 90, 100));
+        break;
     case ICON_INFO:
     case ICON_WARNING:
     case ICON_ERROR: {

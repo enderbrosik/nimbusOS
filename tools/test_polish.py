@@ -56,7 +56,7 @@ with Qemu([IMG], name="polish") as q:
 
     # ---- Settings: 1280x800, keep it
     q.key("meta_l")
-    for _ in range(11): q.key("down")
+    for _ in range(12): q.key("down")
     q.key("ret")
     q.wait_serial(r'created: "Settings"', 5)
     sx, sy = 192, 159                          # centred 640x440 client at 1024x768

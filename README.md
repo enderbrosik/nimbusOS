@@ -110,11 +110,14 @@ needs are in `kernel/libgcc.c`.
 ```
 arch/x86/      boot/mbr.asm, boot/stage2.asm, entry.asm, isr.asm, GDT, IDT/PIC, linker script
 kernel/        main, printf, string, panic, PMM, paging (VMM), heap, tasks/scheduler, ACPI power, self tests
-drivers/       serial, VGA text, PIT, PS/2 controller, keyboard, mouse, PCI, framebuffer (Bochs VBE), ATA PIO, RTC
+drivers/       serial, VGA text, PIT, PS/2 controller, keyboard, mouse, PCI, framebuffer (Bochs VBE), ATA PIO, RTC,
+               AC'97 audio, e1000 network
 fs/            nbfs.[ch] NimbusFS (shared with host tools), vfs.[ch] volume glue for the kernel
 gui/           gfx (primitives + font), wm (compositor/window manager), desktop, taskbar, menu, widgets,
                dialogs (message/input/file), icons, cursor, BMP codec, clipboard
-apps/          explorer, notepad, paint, terminal, taskmgr, sysprops, app registry
+apps/          explorer, notepad, paint, terminal, taskmgr, sysprops, settings, minesweeper, snake,
+               solitaire, mediaplayer, web browser, app registry
+net/           TCP/IP stack (net.c) and background network jobs (netjob.c)
 installer/     graphical installer
 tools/         mkimage, nfstool (formatter + file tool), fstest (FS test suite), mkwallpaper,
                qemu_harness.py + test_stage1..7.py (headless QEMU tests)
@@ -395,6 +398,49 @@ make run-target           # boot the freshly installed disk on its own
 
 ![done](docs/screenshots/stage7-done.png)
 
+## Beyond the stages: games, polish, sound, networking
+
+**Games** (Start menu ▸ Games, and on the desktop): Minesweeper (three
+difficulties, first click is always safe, chording), Snake (speeds up as it
+grows, best score saved), Klondike Solitaire (drag cards or double-click to
+send them home; draw 1 or 3).
+
+**Settings** (Start menu ▸ Settings), stored in `/System/settings.cfg`:
+* Display: 800×600 … 1920×1080, switched live through Bochs DISPI, with a
+  15 s "keep these settings?" countdown that reverts automatically.
+* Appearance: wallpaper, accent colour, smooth (anti-aliased, proportional) UI font.
+* Mouse: pointer speed, double-click speed; the IntelliMouse **wheel** scrolls
+  lists, text and the browser.
+* Sound: master volume, mute, system sounds.  Network: adapter status, DHCP lease renewal.
+* Date & Time: time zone offset, 12/24 h clock.
+
+**Drag and drop:** drag files between Explorer windows and the desktop
+(move; hold Ctrl to copy), or drop an audio file on the Media Player to play it.
+
+**Sound:** an Intel AC'97 driver (`-device AC97`) with a DMA ring, a mixer
+task that resamples any 8/16-bit mono/stereo WAV, synthesized system sounds
+(startup, error, notify, shutdown) and a **Media Player**. The terminal has
+`play <file>`, `beep [hz] [ms]` and `volume [0-100]`.
+On macOS `make run` uses CoreAudio; elsewhere pass `AUDIO=pa` / `alsa` / `sdl`
+(default `none` = silent but functional).
+
+**Networking:** an Intel e1000 driver (QEMU's default NIC, `-nic user,model=e1000`)
+and a TCP/IP stack written from scratch: Ethernet, ARP, IPv4, ICMP, UDP,
+DHCP, DNS, TCP (client, with retransmission) and HTTP/1.0. Terminal commands:
+
+| Command | |
+|---|---|
+| `ifconfig` | address, gateway, DNS, MAC, packet counters |
+| `dhcp` | renew the lease |
+| `ping <host>` | ICMP echo (QEMU's user network answers for 10.0.2.2) |
+| `nslookup <name> [server]` | DNS A lookup |
+| `wget <url> [file]` | HTTP download into the file system |
+| `http <url>` | print a page |
+
+The **Web Browser** (Start menu) is a text-mode HTML viewer: it renders
+headings, paragraphs, lists, `<pre>` and links (click to follow, Back,
+address bar). Only `http://` is supported – there is no TLS.
+
 ---
 
 ## Design notes and trade-offs
@@ -420,10 +466,10 @@ make run-target           # boot the freshly installed disk on its own
 
 ## Known limitations
 
-* No user mode, processes, or ELF loading; no networking, sound or USB.
+* No USB, no TLS/HTTPS, TCP is client-only.
 * LBA28 ATA PIO only (disks up to 128 GiB); no AHCI.
 * Single CPU; the file system is used only from the GUI task.
-* Fixed 1024×768 resolution; needs a Bochs-VBE-compatible adapter.
+* Needs a Bochs-VBE-compatible display adapter (`-vga std`).
 
 ## References
 

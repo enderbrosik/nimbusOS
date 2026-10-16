@@ -17,6 +17,7 @@ const struct app_def g_apps[APP_COUNT] = {
     [APP_SNAKE]     = { "Snake", ICON_SNAKE, snake_open, false },
     [APP_SOLITAIRE] = { "Solitaire", ICON_CARDS, solitaire_open, false },
     [APP_MEDIA]     = { "Media Player", ICON_AUDIO, mediaplayer_open, false },
+    [APP_WEB]       = { "Web Browser", ICON_WEB, web_open, true },
     [APP_SETTINGS]  = { "Settings", ICON_SETTINGS, settings_open, true },
 };
 
@@ -41,5 +42,6 @@ void app_open_path(const char *path)
     const char *dot = strrchr(path, '.');
     if (dot && !strcasecmp(dot, ".bmp")) app_launch(APP_PAINT, path);
     else if (dot && !strcasecmp(dot, ".wav")) app_launch(APP_MEDIA, path);
+    else if (dot && (!strcasecmp(dot, ".html") || !strcasecmp(dot, ".htm"))) app_launch(APP_NOTEPAD, path);
     else app_launch(APP_NOTEPAD, path);
 }

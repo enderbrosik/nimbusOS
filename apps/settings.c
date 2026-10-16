@@ -22,13 +22,15 @@
 #include "kernel/kprintf.h"
 #include "kernel/sound.h"
 #include "drivers/ac97.h"
+#include "net/net.h"
+#include "net/netjob.h"
 
 #define NAV_W 150
 #define ROW 26
 
-enum { PG_DISPLAY, PG_APPEARANCE, PG_MOUSE, PG_SOUND, PG_TIME, NPAGES };
-static const char *page_names[NPAGES] = { "Display", "Appearance", "Mouse", "Sound", "Date & Time" };
-static const int page_icons[NPAGES] = { ICON_COMPUTER, ICON_WALLPAPER, ICON_SETTINGS, ICON_AUDIO, ICON_INFO };
+enum { PG_DISPLAY, PG_APPEARANCE, PG_MOUSE, PG_SOUND, PG_NETWORK, PG_TIME, NPAGES };
+static const char *page_names[NPAGES] = { "Display", "Appearance", "Mouse", "Sound", "Network", "Date & Time" };
+static const int page_icons[NPAGES] = { ICON_COMPUTER, ICON_WALLPAPER, ICON_SETTINGS, ICON_AUDIO, ICON_NETWORK, ICON_INFO };
 
 static const struct { int w, h; } modes[] = {
     { 800, 600 }, { 1024, 768 }, { 1280, 720 }, { 1280, 800 }, { 1280, 1024 },
@@ -45,7 +47,8 @@ static const int dbl_times[3] = { 300, 450, 650 };
 struct settings_app {
     int page;
     int sel_mode;
-    rect_t apply_btn, wall_btn, tz_minus, tz_plus, vol_bar, test_btn;
+    rect_t apply_btn, wall_btn, tz_minus, tz_plus, vol_bar, test_btn, renew_btn;
+    struct netjob *job;
     bool drag_vol;
     /* "keep display settings?" countdown */
     window_t *confirm;
@@ -152,6 +155,31 @@ static void paint(window_t *w)
         gfx_ui_text(s, c.x + 20, c.y + 210, "Play sounds for startup, dialogs and games", C_TEXT);
         a->test_btn = rect_make(c.x, c.y + 244, 140, 28);
         ui_button(s, a->test_btn, "Play test sound", sound_available() ? BTN_NORMAL : BTN_DISABLED);
+        break;
+    }
+    case PG_NETWORK: {
+        heading(s, c, "Ethernet");
+        char ipb[16];
+        if (!g_net.present) {
+            gfx_ui_text(s, c.x, c.y + 34, "No network card found (QEMU: -nic user,model=e1000)", C_TEXT_DIM);
+            break;
+        }
+        snprintf(b, sizeof b, "Intel e1000, MAC %02x:%02x:%02x:%02x:%02x:%02x", g_net.mac[0], g_net.mac[1], g_net.mac[2],
+                 g_net.mac[3], g_net.mac[4], g_net.mac[5]);
+        gfx_ui_text(s, c.x, c.y + 34, b, C_TEXT);
+        static const char *labels[4] = { "IP address", "Subnet mask", "Gateway", "DNS server" };
+        u32 vals[4] = { g_net.ip, g_net.mask, g_net.gw, g_net.dns };
+        for (int i = 0; i < 4; i++) {
+            gfx_ui_text(s, c.x, c.y + 66 + i * 24, labels[i], C_TEXT_DIM);
+            if (g_net.configured) ip_to_str(vals[i], ipb); else strcpy(ipb, "-");
+            gfx_ui_text(s, c.x + 130, c.y + 66 + i * 24, ipb, C_TEXT);
+        }
+        snprintf(b, sizeof b, "Received %u packets, sent %u packets", g_net.rx_packets, g_net.tx_packets);
+        gfx_ui_text(s, c.x, c.y + 172, b, C_TEXT_DIM);
+        gfx_ui_text(s, c.x, c.y + 194, a->job ? "Requesting an address..." : g_net.configured ? "Connected (DHCP)" : "Not connected",
+                    g_net.configured ? RGB(30, 130, 60) : C_TEXT_DIM);
+        a->renew_btn = rect_make(c.x, c.y + 226, 150, 28);
+        ui_button(s, a->renew_btn, "Renew DHCP lease", a->job ? BTN_DISABLED : BTN_NORMAL);
         break;
     }
     case PG_TIME: {
@@ -268,7 +296,15 @@ static void on_event(window_t *w, event_t *e)
     rect_t c = content(w);
     switch (e->type) {
     case EV_PAINT: paint(w); break;
-    case EV_TIMER: if (a->page == PG_TIME) paint(w); break;
+    case EV_TIMER:
+        if (a->job) {
+            char line[200];
+            bool er;
+            while (netjob_next_line(a->job, line, sizeof line, &er)) {}
+            if (netjob_done(a->job)) { netjob_release(a->job); a->job = NULL; }
+        }
+        if (a->page == PG_TIME || a->page == PG_NETWORK) paint(w);
+        break;
     case EV_MOUSE_DOWN: {
         if (e->x < NAV_W) {
             int i = (e->y - 12) / 34;
@@ -332,6 +368,12 @@ static void on_event(window_t *w, event_t *e)
                 if (!was) settings_set_int("system_sounds", 0);
             }
             break;
+        case PG_NETWORK:
+            if (!a->job && g_net.present && rect_contains(a->renew_btn, e->x, e->y)) {
+                char *argv[1] = { "dhcp" };
+                a->job = netjob_start(1, argv);
+            }
+            break;
         case PG_TIME: {
             int tz = settings_get_int("tz_minutes", 0);
             if (rect_contains(a->tz_minus, e->x, e->y) && tz > -720) settings_set_int("tz_minutes", tz - 30);
@@ -352,7 +394,7 @@ static void on_event(window_t *w, event_t *e)
         if (a->drag_vol) { a->drag_vol = false; settings_set_int("volume", sound_volume()); }
         break;
     case EV_CLOSE: wm_destroy_window(w); break;
-    case EV_DESTROY: kfree(a); set_win = NULL; break;
+    case EV_DESTROY: if (a->job) netjob_release(a->job); kfree(a); set_win = NULL; break;
     }
 }
 

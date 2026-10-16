@@ -20,6 +20,7 @@
 #include "gui/theme.h"
 #include "kernel/settings.h"
 #include "kernel/sound.h"
+#include "net/net.h"
 #include "drivers/ps2.h"
 #include "drivers/keyboard.h"
 #include "drivers/mouse.h"
@@ -126,6 +127,7 @@ void kmain(struct bootinfo *bi)
     /* ---- Stage 5: desktop ---- */
     settings_load();
     sound_init();
+    net_init();
     int rw = 1024, rh = 768;
     const char *res = settings_get("resolution", "1024x768");
     char *x;

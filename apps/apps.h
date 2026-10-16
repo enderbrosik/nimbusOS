@@ -4,7 +4,7 @@
 #include "kernel/types.h"
 
 enum { APP_EXPLORER, APP_NOTEPAD, APP_PAINT, APP_TERMINAL, APP_TASKMGR, APP_INSTALLER,
-       APP_MINES, APP_SNAKE, APP_SOLITAIRE, APP_MEDIA, APP_SETTINGS, APP_COUNT };
+       APP_MINES, APP_SNAKE, APP_SOLITAIRE, APP_MEDIA, APP_WEB, APP_SETTINGS, APP_COUNT };
 
 struct app_def {
     const char *name;
@@ -30,5 +30,6 @@ void snake_open(const char *arg);
 void solitaire_open(const char *arg);
 void settings_open(const char *page);
 void mediaplayer_open(const char *path);
+void web_open(const char *url);
 void sysprops_open(void);
 #endif

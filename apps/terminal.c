@@ -23,6 +23,7 @@
 #include "kernel/kprintf.h"
 #include "kernel/sound.h"
 #include "kernel/settings.h"
+#include "net/netjob.h"
 
 #define SCROLLBACK 500
 #define MAXCOL 160
@@ -51,6 +52,7 @@ struct term {
     u32 cap_len, cap_size;
     int cols;
     bool nl_pending;
+    struct netjob *job;          /* running network command */
 };
 
 static window_t *cur_win;        /* terminal executing a command (for out()) */
@@ -121,7 +123,7 @@ static void paint(window_t *w)
     /* the prompt line is the last row */
     char prompt[NBFS_PATH_MAX + 16];
     snprintf(prompt, sizeof prompt, "nimbus:%s$ ", t->cwd);
-    int total = t->count + 1;
+    int total = t->count + (t->job ? 0 : 1);   /* no prompt while a command runs */
     int first = MAX(0, total - rows - t->view);
     for (int r = 0; r < rows && first + r < total; r++) {
         int idx = first + r;
@@ -208,6 +210,9 @@ static void cmd_help(struct term *t, int argc, char **argv)
         "  fsck                check the file system",
         "  clear               clear the screen",
         "  play <file.wav>     play a sound file (beep [hz] [ms], volume [0-100|mute])",
+        "  ifconfig / dhcp     network status / renew the DHCP lease",
+        "  ping <host> [n]     ICMP echo;  nslookup <name>   DNS lookup",
+        "  wget <url> [file]   download over HTTP;  http <url>  print a page",
         "  history / exit / shutdown / reboot / uname",
     };
     for (unsigned i = 0; i < ARRAY_SIZE(h); i++) out(C_FG, "%s\n", h[i]);
@@ -570,6 +575,11 @@ static void execute(window_t *w, const char *cmdline)
         }
         return;
     }
+    if (netjob_is_command(argv[0])) {
+        t->job = netjob_start(argc, argv);
+        wm_set_timer(w, 50);                   /* drain its output quickly */
+        return;
+    }
     out(C_ERR, "%s: command not found (try 'help')\n", argv[0]);
 }
 
@@ -602,7 +612,33 @@ static void on_event(window_t *w, event_t *ev)
     case EV_PAINT: t->cols = term_cols(w); paint(w); break;
     case EV_RESIZE: t->cols = term_cols(w); break;
     case EV_FOCUS: case EV_BLUR: paint(w); break;
-    case EV_TIMER: t->blink = !t->blink; paint(w); break;
+    case EV_TIMER:
+        if (t->job) {
+            char line[256];
+            bool is_err;
+            cur_win = w;
+            while (netjob_next_line(t->job, line, sizeof line, &is_err)) out(is_err ? C_ERR : C_FG, "%s\n", line);
+            if (netjob_done(t->job)) {
+                char *data, name[64];
+                u32 len;
+                if (netjob_take_download(t->job, &data, &len, name, sizeof name)) {
+                    char p[NBFS_PATH_MAX];
+                    abs_path(t, name, p);
+                    int r = vfs_write_all(p, data, len);
+                    if (r) err("wget", name, r);
+                    else out(C_PROMPT, "Saved %u bytes to %s\n", len, p);
+                    kfree(data);
+                }
+                netjob_release(t->job);
+                t->job = NULL;
+                wm_set_timer(w, 530);
+            }
+            paint(w);
+            break;
+        }
+        t->blink = !t->blink;
+        paint(w);
+        break;
     case EV_WHEEL:
         t->view = MAX(0, MIN(MAX(0, t->count + 1 - term_rows(w)), t->view - ev->wheel * 3));
         paint(w);
@@ -611,6 +647,10 @@ static void on_event(window_t *w, event_t *ev)
         struct key_event *k = &ev->key;
         if (!k->pressed) break;
         t->blink = true;
+        if (t->job) {                         /* only Ctrl+C while a network command runs */
+            if ((k->mods & MOD_CTRL) && k->key == 'c') { netjob_cancel(t->job); cur_win = w; out(C_ERR, "^C\n"); }
+            break;
+        }
         if (k->key == KEY_ENTER) { submit(w); break; }
         if (k->key == KEY_UP || k->key == KEY_DOWN) {
             if (!t->nhist) break;
@@ -644,7 +684,10 @@ static void on_event(window_t *w, event_t *ev)
         break;
     }
     case EV_CLOSE: wm_destroy_window(w); break;
-    case EV_DESTROY: kfree(t->lines); kfree(t->capture); kfree(t); break;
+    case EV_DESTROY:
+        if (t->job) { netjob_cancel(t->job); netjob_release(t->job); }
+        kfree(t->lines); kfree(t->capture); kfree(t);
+        break;
     }
 }
 
