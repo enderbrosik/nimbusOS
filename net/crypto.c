@@ -658,3 +658,359 @@ int aes128_gcm_open(const u8 key[16], const u8 nonce[12], const u8 *ad, size_t a
     gcm_ctr(&a, j0, in, pt, len);
     return 0;
 }
+
+/* ======================================================================
+ * SHA-512 (FIPS 180-4)
+ * ==================================================================== */
+static const u64 K512[80] = {
+    0x428a2f98d728ae22ull, 0x7137449123ef65cdull, 0xb5c0fbcfec4d3b2full, 0xe9b5dba58189dbbcull,
+    0x3956c25bf348b538ull, 0x59f111f1b605d019ull, 0x923f82a4af194f9bull, 0xab1c5ed5da6d8118ull,
+    0xd807aa98a3030242ull, 0x12835b0145706fbeull, 0x243185be4ee4b28cull, 0x550c7dc3d5ffb4e2ull,
+    0x72be5d74f27b896full, 0x80deb1fe3b1696b1ull, 0x9bdc06a725c71235ull, 0xc19bf174cf692694ull,
+    0xe49b69c19ef14ad2ull, 0xefbe4786384f25e3ull, 0x0fc19dc68b8cd5b5ull, 0x240ca1cc77ac9c65ull,
+    0x2de92c6f592b0275ull, 0x4a7484aa6ea6e483ull, 0x5cb0a9dcbd41fbd4ull, 0x76f988da831153b5ull,
+    0x983e5152ee66dfabull, 0xa831c66d2db43210ull, 0xb00327c898fb213full, 0xbf597fc7beef0ee4ull,
+    0xc6e00bf33da88fc2ull, 0xd5a79147930aa725ull, 0x06ca6351e003826full, 0x142929670a0e6e70ull,
+    0x27b70a8546d22ffcull, 0x2e1b21385c26c926ull, 0x4d2c6dfc5ac42aedull, 0x53380d139d95b3dfull,
+    0x650a73548baf63deull, 0x766a0abb3c77b2a8ull, 0x81c2c92e47edaee6ull, 0x92722c851482353bull,
+    0xa2bfe8a14cf10364ull, 0xa81a664bbc423001ull, 0xc24b8b70d0f89791ull, 0xc76c51a30654be30ull,
+    0xd192e819d6ef5218ull, 0xd69906245565a910ull, 0xf40e35855771202aull, 0x106aa07032bbd1b8ull,
+    0x19a4c116b8d2d0c8ull, 0x1e376c085141ab53ull, 0x2748774cdf8eeb99ull, 0x34b0bcb5e19b48a8ull,
+    0x391c0cb3c5c95a63ull, 0x4ed8aa4ae3418acbull, 0x5b9cca4f7763e373ull, 0x682e6ff3d6b2b8a3ull,
+    0x748f82ee5defb2fcull, 0x78a5636f43172f60ull, 0x84c87814a1f0ab72ull, 0x8cc702081a6439ecull,
+    0x90befffa23631e28ull, 0xa4506cebde82bde9ull, 0xbef9a3f7b2c67915ull, 0xc67178f2e372532bull,
+    0xca273eceea26619cull, 0xd186b8c721c0c207ull, 0xeada7dd6cde0eb1eull, 0xf57d4f7fee6ed178ull,
+    0x06f067aa72176fbaull, 0x0a637dc5a2c898a6ull, 0x113f9804bef90daeull, 0x1b710b35131c471bull,
+    0x28db77f523047d84ull, 0x32caab7b40c72493ull, 0x3c9ebe0a15c9bebcull, 0x431d67c49c100d4cull,
+    0x4cc5d4becb3e42b6ull, 0x597f299cfc657e2aull, 0x5fcb6fab3ad6faecull, 0x6c44198c4a475817ull,
+};
+
+static u64 rotr64(u64 x, int n) { return (x >> n) | (x << (64 - n)); }
+
+static void sha512_block(struct sha512 *s, const u8 *p)
+{
+    u64 w[80];
+    for (int i = 0; i < 16; i++) w[i] = be64(p + 8 * i);
+    for (int i = 16; i < 80; i++) {
+        u64 s0 = rotr64(w[i - 15], 1) ^ rotr64(w[i - 15], 8) ^ (w[i - 15] >> 7);
+        u64 s1 = rotr64(w[i - 2], 19) ^ rotr64(w[i - 2], 61) ^ (w[i - 2] >> 6);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+    u64 a = s->h[0], b = s->h[1], c = s->h[2], d = s->h[3], e = s->h[4], f = s->h[5], g = s->h[6], h = s->h[7];
+    for (int i = 0; i < 80; i++) {
+        u64 t1 = h + (rotr64(e, 14) ^ rotr64(e, 18) ^ rotr64(e, 41)) + ((e & f) ^ (~e & g)) + K512[i] + w[i];
+        u64 t2 = (rotr64(a, 28) ^ rotr64(a, 34) ^ rotr64(a, 39)) + ((a & b) ^ (a & c) ^ (b & c));
+        h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    }
+    s->h[0] += a; s->h[1] += b; s->h[2] += c; s->h[3] += d;
+    s->h[4] += e; s->h[5] += f; s->h[6] += g; s->h[7] += h;
+}
+
+void sha512_init(struct sha512 *s)
+{
+    static const u64 iv[8] = { 0x6a09e667f3bcc908ull, 0xbb67ae8584caa73bull, 0x3c6ef372fe94f82bull,
+                               0xa54ff53a5f1d36f1ull, 0x510e527fade682d1ull, 0x9b05688c2b3e6c1full,
+                               0x1f83d9abfb41bd6bull, 0x5be0cd19137e2179ull };
+    cpy(s->h, iv, sizeof iv);
+    s->len = 0;
+    s->n = 0;
+}
+
+void sha512_update(struct sha512 *s, const void *data, size_t len)
+{
+    const u8 *p = data;
+    s->len += len;
+    while (len) {
+        u32 take = 128 - s->n;
+        if (take > len) take = (u32)len;
+        cpy(s->buf + s->n, p, take);
+        s->n += take; p += take; len -= take;
+        if (s->n == 128) { sha512_block(s, s->buf); s->n = 0; }
+    }
+}
+
+void sha512_final(struct sha512 *s, u8 out[64])
+{
+    u64 bits = s->len * 8;
+    u8 pad = 0x80, z = 0;
+    sha512_update(s, &pad, 1);
+    while (s->n != 112) sha512_update(s, &z, 1);
+    u8 l[16];
+    zero(l, 8);
+    put_be64(l + 8, bits);
+    sha512_update(s, l, 16);
+    for (int i = 0; i < 8; i++) put_be64(out + 8 * i, s->h[i]);
+}
+
+void sha512(const void *data, size_t len, u8 out[64])
+{
+    struct sha512 s;
+    sha512_init(&s);
+    sha512_update(&s, data, len);
+    sha512_final(&s, out);
+}
+
+/* ======================================================================
+ * Ed25519 (RFC 8032) on the twisted Edwards curve -x^2 + y^2 = 1 + d x^2 y^2,
+ * extended coordinates (X:Y:Z:T), x = X/Z, y = Y/Z, xy = T/Z.
+ * Constants are derived from their definitions at first use.
+ * ==================================================================== */
+struct ge { fe X, Y, Z, T; };
+
+static fe ed_d, ed_2d, ed_sqrtm1;
+static struct ge ed_base;
+static int ed_ready;
+
+static void fe_copy(fe h, const fe a) { cpy(h, a, sizeof(fe)); }
+static void fe_set(fe h, u64 v) { h[0] = v; h[1] = h[2] = h[3] = h[4] = 0; }
+static void fe_neg(fe h, const fe a) { fe z; fe_set(z, 0); fe_sub(h, z, a); }
+static int fe_isodd(const fe a) { u8 s[32]; fe_tobytes(s, a); return s[0] & 1; }
+static int fe_equal(const fe a, const fe b)
+{
+    u8 x[32], y[32];
+    fe_tobytes(x, a); fe_tobytes(y, b);
+    return crypto_memcmp(x, y, 32) == 0;
+}
+
+/* z^(2^252 - 3): bits 251..2 set, bit 1 clear, bit 0 set */
+static void fe_pow2523(fe out, const fe z)
+{
+    fe r;
+    fe_set(r, 1);
+    for (int i = 251; i >= 0; i--) {
+        fe_sq(r, r);
+        if (i >= 2 || i == 0) fe_mul(r, r, z);
+    }
+    fe_copy(out, r);
+}
+
+static void ge_identity(struct ge *p) { fe_set(p->X, 0); fe_set(p->Y, 1); fe_set(p->Z, 1); fe_set(p->T, 0); }
+
+/* unified addition (works for doubling too), RFC 8032 section 5.1.4 */
+static void ge_add(struct ge *r, const struct ge *p, const struct ge *q)
+{
+    fe a, b, c, d, e, f, g, h, t;
+    fe_sub(a, p->Y, p->X); fe_sub(t, q->Y, q->X); fe_mul(a, a, t);
+    fe_add(b, p->Y, p->X); fe_add(t, q->Y, q->X); fe_mul(b, b, t);
+    fe_mul(c, p->T, q->T); fe_mul(c, c, ed_2d);
+    fe_mul(d, p->Z, q->Z); fe_add(d, d, d);
+    fe_sub(e, b, a); fe_sub(f, d, c); fe_add(g, d, c); fe_add(h, b, a);
+    fe_mul(r->X, e, f); fe_mul(r->Y, g, h); fe_mul(r->T, e, h); fe_mul(r->Z, f, g);
+}
+
+/* scalar (32 bytes, little endian) times point: double-and-add */
+static void ge_scalarmult(struct ge *r, const u8 k[32], const struct ge *p)
+{
+    struct ge acc;
+    ge_identity(&acc);
+    for (int i = 255; i >= 0; i--) {
+        ge_add(&acc, &acc, &acc);
+        if ((k[i >> 3] >> (i & 7)) & 1) ge_add(&acc, &acc, p);
+    }
+    *r = acc;
+}
+
+static void ge_encode(u8 out[32], const struct ge *p)
+{
+    fe zi, x, y;
+    fe_invert(zi, p->Z);
+    fe_mul(x, p->X, zi);
+    fe_mul(y, p->Y, zi);
+    fe_tobytes(out, y);
+    out[31] |= (u8)(fe_isodd(x) << 7);
+}
+
+/* RFC 8032 section 5.1.3; returns 0 on success */
+static int ge_decode(struct ge *p, const u8 in[32])
+{
+    fe u, v, v3, x, vx2, t;
+    int sign = in[31] >> 7;
+    u8 ycheck[32];
+    fe_frombytes(p->Y, in);                    /* drops the sign bit */
+    fe_tobytes(ycheck, p->Y);                  /* reject y >= p (non-canonical) */
+    u8 masked[32];
+    cpy(masked, in, 32);
+    masked[31] &= 0x7F;
+    if (crypto_memcmp(ycheck, masked, 32)) return -1;
+    fe_set(p->Z, 1);
+    fe_sq(u, p->Y);
+    fe_mul(v, u, ed_d);
+    fe_sub(u, u, p->Z);                        /* u = y^2 - 1 */
+    fe_add(v, v, p->Z);                        /* v = d y^2 + 1 */
+    fe_sq(v3, v); fe_mul(v3, v3, v);           /* v^3 */
+    fe_sq(x, v3); fe_mul(x, x, v); fe_mul(x, x, u);   /* u v^7 */
+    fe_pow2523(x, x);
+    fe_mul(x, x, v3); fe_mul(x, x, u);         /* x = u v^3 (u v^7)^((p-5)/8) */
+    fe_sq(vx2, x); fe_mul(vx2, vx2, v);
+    if (!fe_equal(vx2, u)) {
+        fe_neg(t, u);
+        if (!fe_equal(vx2, t)) return -1;
+        fe_mul(x, x, ed_sqrtm1);
+    }
+    fe_set(t, 0);
+    if (fe_equal(x, t) && sign) return -1;
+    if (fe_isodd(x) != sign) fe_neg(x, x);
+    fe_copy(p->X, x);
+    fe_mul(p->T, p->X, p->Y);
+    return 0;
+}
+
+static void ed_init(void)
+{
+    if (ed_ready) return;
+    fe a, b;
+    /* d = -121665 / 121666 */
+    fe_set(a, 121665); fe_set(b, 121666);
+    fe_invert(b, b);
+    fe_mul(a, a, b);
+    fe_neg(ed_d, a);
+    fe_add(ed_2d, ed_d, ed_d);
+    /* sqrt(-1) = 2^((p-1)/4); (p-1)/4 = 2^253 - 5: bits 252..3 set, then 011 */
+    fe r, two;
+    fe_set(r, 1); fe_set(two, 2);
+    for (int i = 252; i >= 0; i--) {
+        fe_sq(r, r);
+        if (i >= 3 || i == 1 || i == 0) fe_mul(r, r, two);
+    }
+    fe_copy(ed_sqrtm1, r);
+    /* base point: y = 4/5, x even */
+    u8 enc[32];
+    fe_set(a, 4); fe_set(b, 5);
+    fe_invert(b, b);
+    fe_mul(a, a, b);
+    fe_tobytes(enc, a);
+    ed_ready = 1;
+    ge_decode(&ed_base, enc);
+}
+
+/* ---- scalars modulo L = 2^252 + 27742317777372353535851937790883648493 ---- */
+static const u64 ED_L[4] = { 0x5812631a5cf5d3edull, 0x14def9dea2f79cd6ull, 0, 0x1000000000000000ull };
+
+static int sc_geq_l(const u64 r[4])
+{
+    for (int i = 3; i >= 0; i--) {
+        if (r[i] > ED_L[i]) return 1;
+        if (r[i] < ED_L[i]) return 0;
+    }
+    return 1;
+}
+
+static void sc_sub_l(u64 r[4])
+{
+    u64 borrow = 0;
+    for (int i = 0; i < 4; i++) {
+        u128 t = (u128)r[i] - ED_L[i] - borrow;
+        r[i] = (u64)t;
+        borrow = (u64)(t >> 127) & 1;
+    }
+}
+
+/* reduce a little-endian number of `len` bytes mod L, bit by bit */
+static void sc_reduce(u8 out[32], const u8 *in, int len)
+{
+    u64 r[4] = { 0, 0, 0, 0 };
+    for (int i = len * 8 - 1; i >= 0; i--) {
+        r[3] = (r[3] << 1) | (r[2] >> 63);
+        r[2] = (r[2] << 1) | (r[1] >> 63);
+        r[1] = (r[1] << 1) | (r[0] >> 63);
+        r[0] = (r[0] << 1) | ((in[i >> 3] >> (i & 7)) & 1);
+        if (sc_geq_l(r)) sc_sub_l(r);
+    }
+    for (int i = 0; i < 4; i++)
+        for (int j = 0; j < 8; j++) out[8 * i + j] = (u8)(r[i] >> (8 * j));
+}
+
+/* out = (a * b + c) mod L, all 32-byte little-endian */
+static void sc_muladd(u8 out[32], const u8 a[32], const u8 b[32], const u8 c[32])
+{
+    u64 x[4], y[4], z[9] = { 0 };
+    for (int i = 0; i < 4; i++) {
+        x[i] = 0; y[i] = 0;
+        for (int j = 7; j >= 0; j--) { x[i] = x[i] << 8 | a[8 * i + j]; y[i] = y[i] << 8 | b[8 * i + j]; }
+    }
+    for (int i = 0; i < 4; i++) {
+        u128 carry = 0;
+        for (int j = 0; j < 4; j++) {
+            u128 t = (u128)x[i] * y[j] + z[i + j] + carry;
+            z[i + j] = (u64)t;
+            carry = t >> 64;
+        }
+        z[i + 4] += (u64)carry;
+    }
+    u128 carry = 0;                            /* + c */
+    for (int i = 0; i < 9; i++) {
+        u64 ci = 0;
+        if (i < 4) for (int j = 7; j >= 0; j--) ci = ci << 8 | c[8 * i + j];
+        u128 t = (u128)z[i] + ci + carry;
+        z[i] = (u64)t;
+        carry = t >> 64;
+    }
+    u8 wide[72];
+    for (int i = 0; i < 9; i++)
+        for (int j = 0; j < 8; j++) wide[8 * i + j] = (u8)(z[i] >> (8 * j));
+    sc_reduce(out, wide, 72);
+}
+
+int ed25519_verify(const u8 sig[64], const void *msg, size_t len, const u8 pub[32])
+{
+    ed_init();
+    struct ge A, R, sB, kA, rhs;
+    if (ge_decode(&A, pub) || ge_decode(&R, sig)) return -1;
+    /* S must be canonical (< L) */
+    u64 s[4];
+    for (int i = 0; i < 4; i++) { s[i] = 0; for (int j = 7; j >= 0; j--) s[i] = s[i] << 8 | sig[32 + 8 * i + j]; }
+    if (sc_geq_l(s)) return -1;
+    u8 h[64], k[32];
+    struct sha512 st;
+    sha512_init(&st);
+    sha512_update(&st, sig, 32);
+    sha512_update(&st, pub, 32);
+    sha512_update(&st, msg, len);
+    sha512_final(&st, h);
+    sc_reduce(k, h, 64);
+    ge_scalarmult(&sB, sig + 32, &ed_base);
+    ge_scalarmult(&kA, k, &A);
+    ge_add(&rhs, &R, &kA);
+    u8 e1[32], e2[32];
+    ge_encode(e1, &sB);
+    ge_encode(e2, &rhs);
+    return crypto_memcmp(e1, e2, 32) ? -1 : 0;
+}
+
+void ed25519_public_key(u8 pub[32], const u8 seed[32])
+{
+    ed_init();
+    u8 h[64];
+    sha512(seed, 32, h);
+    h[0] &= 248; h[31] &= 127; h[31] |= 64;
+    struct ge A;
+    ge_scalarmult(&A, h, &ed_base);
+    ge_encode(pub, &A);
+    zero(h, 64);
+}
+
+void ed25519_sign(u8 sig[64], const void *msg, size_t len, const u8 seed[32], const u8 pub[32])
+{
+    ed_init();
+    u8 h[64], r[32], k[32], hr[64];
+    sha512(seed, 32, h);
+    h[0] &= 248; h[31] &= 127; h[31] |= 64;
+    struct sha512 st;
+    sha512_init(&st);
+    sha512_update(&st, h + 32, 32);
+    sha512_update(&st, msg, len);
+    sha512_final(&st, hr);
+    sc_reduce(r, hr, 64);
+    struct ge R;
+    ge_scalarmult(&R, r, &ed_base);
+    ge_encode(sig, &R);
+    sha512_init(&st);
+    sha512_update(&st, sig, 32);
+    sha512_update(&st, pub, 32);
+    sha512_update(&st, msg, len);
+    sha512_final(&st, hr);
+    sc_reduce(k, hr, 64);
+    sc_muladd(sig + 32, k, h, r);              /* S = r + k*a mod L */
+    zero(h, 64);
+    zero(r, 32);
+}

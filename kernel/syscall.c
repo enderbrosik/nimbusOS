@@ -6,6 +6,7 @@
  * drain output, for a file request) and the scheduler keeps running other
  * tasks meanwhile.
  */
+#include "kernel/version.h"
 #include "kernel/proc.h"
 #include "kernel/task.h"
 #include "kernel/pmm.h"
@@ -46,7 +47,7 @@ static long sys_sysinfo(struct nimbus_sysinfo *u)
     struct task_info ti[64];
     si.tasks = task_list(ti, 64);
     si.processes = proc_count();
-    strcpy(si.os, "NimbusOS 0.2 x86_64");
+    strcpy(si.os, "NimbusOS " NIMBUS_VERSION " x86_64");
     strlcpy(si.cpu, cpu_brand, sizeof si.cpu);
     memcpy(u, &si, sizeof si);
     return 0;

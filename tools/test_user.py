@@ -88,7 +88,7 @@ with Qemu([IMG], name="user") as q:
     assert "wc: /no/such/file: No such file or directory" in q.serial()
     run("sysinfo")
     exited("sysinfo", 0)
-    assert "NimbusOS 0.2 x86_64" in q.serial()
+    assert re.search(r"NimbusOS [0-9.]+ x86_64", q.serial())
 
     # 5. faults end only the faulting program
     for how, what in [("null", r"Page Fault at address 0 \(page not present, write\)"),

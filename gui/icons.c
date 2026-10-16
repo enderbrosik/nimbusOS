@@ -199,6 +199,13 @@ static void draw_icon(surface_t *s, int id)
         gfx_fill_rect(s, 7, 8, 7, 5, RGB(80, 180, 90));
         gfx_fill_rect(s, 18, 18, 8, 6, RGB(80, 180, 90));
         break;
+    case ICON_UPDATE:                       /* green circle with a down arrow (download) */
+        gfx_fill_circle(s, 16, 16, 13, RGB(46, 160, 80));
+        gfx_circle(s, 16, 16, 13, RGB(24, 110, 50));
+        gfx_fill_rect(s, 14, 7, 5, 11, 0xFFFFFF);
+        for (int i = 0; i < 6; i++) gfx_hline(s, 10 + i, 18 + i, 13 - 2 * i, 0xFFFFFF);
+        gfx_fill_rect(s, 9, 25, 15, 2, RGB(220, 245, 225));
+        break;
     case ICON_NETWORK:
         gfx_round_rect(s, 3, 3, 14, 11, 2, RGB(50, 54, 64));
         gfx_fill_rect(s, 5, 5, 10, 7, RGB(60, 140, 230));

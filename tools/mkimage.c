@@ -9,7 +9,8 @@
  * Disk layout (512-byte sectors):
  *   LBA 0          MBR (stage 1) + boot info block + partition table
  *   LBA 1..63      stage 2 (max 31.5 KiB)
- *   LBA 64..4095   kernel (max ~2 MiB)
+ *   LBA 64..2079   kernel slot A (max ~1 MiB, the one booted after mkimage)
+ *   LBA 2080..4095 kernel slot B (filled by NimbusUpdate)
  *   LBA 4096..end  NimbusFS partition (type 0x4E), formatted by nfstool
  *
  * This tool only ever creates/overwrites the regular file named on the
@@ -29,6 +30,8 @@
 #define STAGE2_LBA 1
 #define KERNEL_LBA 64
 #define FS_LBA 4096
+/* Two kernel slots for NimbusUpdate (kernel/bootarea.c): A at LBA 64, B at 2080. */
+#define KERNEL_SLOT_SECTORS 2016
 #define PART_TYPE 0x4E
 
 static uint8_t *read_file(const char *path, size_t *len)
@@ -73,7 +76,7 @@ int main(int argc, char **argv)
     uint32_t s2_sec = (s2_len + SECTOR - 1) / SECTOR;
     uint32_t k_sec = (k_len + SECTOR - 1) / SECTOR;
     if (STAGE2_LBA + s2_sec > KERNEL_LBA) { fprintf(stderr, "stage2 too big\n"); return 1; }
-    if (KERNEL_LBA + k_sec > FS_LBA) { fprintf(stderr, "kernel too big (%u sectors)\n", k_sec); return 1; }
+    if (k_sec > KERNEL_SLOT_SECTORS) { fprintf(stderr, "kernel too big (%u sectors, slot holds %u)\n", k_sec, KERNEL_SLOT_SECTORS); return 1; }
 
     if (memcmp(mbr + 0x1A0, "NBT1", 4) != 0) { fprintf(stderr, "mbr: boot info magic missing\n"); return 1; }
     put32(mbr + 0x1A4, STAGE2_LBA);

@@ -1,0 +1,3 @@
+# One line per note; shown in NimbusUpdate. Lines starting with # are ignored.
+NimbusUpdate: signed system updates over HTTPS
+Kernel updates use two boot slots, so a failed update never stops NimbusOS from starting

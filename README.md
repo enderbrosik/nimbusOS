@@ -163,7 +163,8 @@ BIOS ──► LBA 0: MBR (arch/x86/boot/mbr.asm, 512 bytes, loaded at 0x7C00)
 |---|---|
 | 0 | MBR: boot code, boot-info block at 0x1A0 (`NBT1`, stage 2 + kernel location), disk signature at 0x1B8, partition table |
 | 1 – 63 | stage 2 |
-| 64 – 4095 | kernel flat binary (up to ~2 MiB) |
+| 64 – 2079 | kernel slot A (flat binary, up to ~1 MiB) |
+| 2080 – 4095 | kernel slot B (used by NimbusUpdate; the MBR says which slot boots) |
 | 4096 – end | partition 1, type `0x4E`: NimbusFS system volume |
 
 ### Memory layout
@@ -452,6 +453,54 @@ with `-mcmodel=large` (they live above 4 GiB) and no SSE.
 
 **Writing a program:** put `myprog.c` in `user/programs/` and run `make`. It
 is built, linked with `user/linker.ld` and installed as `/Programs/myprog.elf`.
+
+## NimbusUpdate: signed updates from your own server
+
+**NimbusUpdate** (Start menu, or `update` in the Terminal) checks a static
+HTTPS server for a newer release, shows its notes, downloads it, verifies
+it and installs it: the kernel and the system files under `/Programs` and
+`/System`. Your documents, pictures and settings are never touched.
+
+**Why it is safe even though TLS certificates are not checked:**
+* every release is signed with **Ed25519** (`net/crypto.c`, checked against
+  the RFC 8032 test vectors). The public key in `keys/update.pub` is compiled
+  into the kernel; a manifest whose signature doesn't verify is rejected;
+* the signed manifest lists the SHA-256 of every file. Nothing is written
+  until *all* downloads have been checked;
+* the kernel has two **boot slots** (A at LBA 64, B at LBA 2080). The new
+  kernel goes to the slot that is not booted, is read back and verified, and
+  only then does a single MBR write switch slots (`kernel/bootarea.c`). If
+  anything fails before that, the old kernel still boots.
+
+Kernel updates need an installed system; on the live CD NimbusUpdate refuses.
+
+### Publishing a release (Vercel)
+
+```sh
+make keys                     # once: keys/update.key (SECRET) + keys/update.pub
+# build and install NimbusOS from this tree, so it trusts keys/update.pub
+make release VERSION=0.3 UPDATE_URL=https://<your-project>.vercel.app
+npm i -g vercel               # once
+cd build/update && vercel deploy --prod
+```
+
+`make release` builds the kernel and system files for that version, writes
+`build/update/` (`manifest.txt`, `manifest.sig`, `files/<sha256>`,
+`vercel.json`, `index.html`) and signs it with `keys/update.key`. Release
+notes come from `release-notes.txt`. Systems built with that `UPDATE_URL`
+find the server on their own; any other system can be pointed at it with
+`update url https://<your-project>.vercel.app`.
+
+> **Keep `keys/update.key` secret and backed up.** It is in `.gitignore`.
+> Anyone who has it can publish updates your systems will accept, and if
+> you lose it, systems that trust `keys/update.pub` can't be updated again
+> (you'd have to reinstall them with a new key).
+
+Test: `tools/test_update.py` builds a 0.2 system with a throwaway key,
+publishes a signed 0.3 release over HTTPS on the host, checks that a
+tampered manifest and a corrupted payload are rejected without installing
+anything, installs the real release, reboots into 0.3 from slot B, and
+checks the live CD refuses kernel updates.
 
 ## Beyond the stages: games, polish, sound, networking, HTTPS
 

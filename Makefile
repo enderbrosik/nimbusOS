@@ -16,6 +16,14 @@ BUILD   := build
 IMG     := $(BUILD)/nimbus.img
 IMG_MB  ?= 64
 
+# Release version (shown at boot, compared by NimbusUpdate) and the default
+# update server; `make release VERSION=0.3 UPDATE_URL=https://you.vercel.app`.
+VERSION    ?= 0.2
+UPDATE_URL ?= https://nimbusos-update.vercel.app
+# Update signing keys (public key compiled into the kernel, secret key signs releases).
+UPDATE_PUBKEY ?= keys/update.pub
+UPDATE_KEY    ?= keys/update.key
+
 TOOLCHAIN ?= $(if $(shell command -v x86_64-elf-gcc 2>/dev/null),gcc,clang)
 ifeq ($(TOOLCHAIN),gcc)
   KCC     ?= x86_64-elf-gcc
@@ -33,7 +41,7 @@ QEMU    ?= qemu-system-x86_64
 CFLAGS  := $(TARGET_FLAG) -std=gnu11 -ffreestanding -fno-builtin -nostdlib -nostdinc \
            -fno-stack-protector -fno-pic -fno-omit-frame-pointer -fno-strict-aliasing \
            -mno-sse -mno-sse2 -mno-mmx -mno-80387 -m64 -mno-red-zone -mcmodel=small \
-           -O2 -g -Wall -Wextra -Wno-unused-parameter -I. -DNIMBUS_KERNEL $(EXTRA_CFLAGS)
+           -O2 -g -Wall -Wextra -Wno-unused-parameter -I. -I$(BUILD)/gen -DNIMBUS_KERNEL $(EXTRA_CFLAGS)
 LDFLAGS := -m elf_x86_64 -z max-page-size=4096 -T arch/x86/linker.ld -nostdlib
 HOSTCFLAGS := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -I.
 
@@ -85,11 +93,23 @@ QEMU_SND := -audiodev $(AUDIO),id=snd0 -device AC97,audiodev=snd0 -nic user,mode
 QEMU_COMMON := -m 256M -vga std $(QEMU_SND) -drive file=$(IMG),format=raw,index=0,media=disk
 QEMU_EXTRA  ?=
 
-.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso programs
+.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso programs release keys FORCE
 all: build
 build: $(IMG)
 
-$(BUILD)/%.o: %.c
+# Generated headers: the version / default update URL (rewritten only when
+# they change, so dependent objects rebuild) and the update signing key.
+GEN := $(BUILD)/gen
+$(GEN)/nimbus_version.h: FORCE
+	@mkdir -p $(GEN)
+	@printf '#define NIMBUS_VERSION "%s"\n#define NIMBUS_UPDATE_URL "%s"\n' '$(VERSION)' '$(UPDATE_URL)' > $@.tmp
+	@cmp -s $@.tmp $@ && rm -f $@.tmp || mv $@.tmp $@
+$(GEN)/update_pubkey.h: $(wildcard $(UPDATE_PUBKEY))
+	@mkdir -p $(GEN)
+	@printf '#define NIMBUS_UPDATE_PUBKEY "%s"\n' "$$(cat $(UPDATE_PUBKEY) 2>/dev/null | tr -d ' \n')" > $@
+FORCE:
+
+$(BUILD)/%.o: %.c | $(GEN)/nimbus_version.h $(GEN)/update_pubkey.h
 	@mkdir -p $(dir $@)
 	$(KCC) $(CFLAGS) -MMD -MP -c $< -o $@
 
@@ -128,6 +148,32 @@ $(BUILD)/tools/cryptotest: tools/cryptotest.c net/crypto.c net/crypto.h
 $(BUILD)/tools/tlstest: tools/tlstest.c net/tls.c net/tls.h net/crypto.c net/crypto.h
 	@mkdir -p $(dir $@)
 	$(HOSTCC) $(HOSTCFLAGS) tools/tlstest.c net/tls.c net/crypto.c -o $@
+
+# ---- NimbusUpdate releases --------------------------------------------------
+# `make keys` once (creates keys/update.key - keep it secret - and keys/update.pub,
+# which every kernel built afterwards trusts), then for each release:
+#   make release VERSION=0.3 UPDATE_URL=https://<project>.vercel.app
+#   cd build/update && vercel deploy --prod
+RELEASE_OUT ?= build/update
+REL_BUILD   := build/release-$(VERSION)
+
+$(BUILD)/tools/nimbuskey: tools/nimbuskey.c net/crypto.c net/crypto.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) tools/nimbuskey.c net/crypto.c -o $@
+
+$(BUILD)/tools/mkrelease: tools/mkrelease.c net/crypto.c net/crypto.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) tools/mkrelease.c net/crypto.c -o $@
+
+keys: $(BUILD)/tools/nimbuskey
+	$(BUILD)/tools/nimbuskey keygen keys
+
+release: $(BUILD)/tools/mkrelease
+	@test -f $(UPDATE_KEY) || (echo "no $(UPDATE_KEY) - run 'make keys' first" && false)
+	$(MAKE) BUILD=$(REL_BUILD) VERSION=$(VERSION) UPDATE_URL=$(UPDATE_URL) UPDATE_PUBKEY=$(UPDATE_PUBKEY) build
+	rm -rf $(RELEASE_OUT)
+	$(BUILD)/tools/mkrelease $(RELEASE_OUT) $(VERSION) $(REL_BUILD)/kernel.bin $(UPDATE_KEY) release-notes.txt \
+	    rootfs $(REL_BUILD)/genroot $(REL_BUILD)/userroot
 
 test: $(BUILD)/tools/fstest $(BUILD)/tools/cryptotest
 	@mkdir -p $(BUILD)/test
@@ -225,6 +271,7 @@ test-all: test $(IMG)
 	python3 tools/test_net.py
 	python3 tools/test_user.py
 	python3 tools/test_https.py
+	python3 tools/test_update.py
 
 clean:
 	rm -rf $(BUILD)

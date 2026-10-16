@@ -5,6 +5,7 @@
  * Output of any command can be redirected with "> file" or ">> file".
  * Up/Down browse the command history, PgUp/PgDn scroll the scrollback.
  */
+#include "kernel/version.h"
 #include "apps/apps.h"
 #include "gui/wm.h"
 #include "gui/widgets.h"
@@ -25,6 +26,8 @@
 #include "kernel/settings.h"
 #include "net/netjob.h"
 #include "kernel/proc.h"
+#include "kernel/update.h"
+#include "kernel/version.h"
 
 #define SCROLLBACK 500
 #define MAXCOL 160
@@ -55,9 +58,17 @@ struct term {
     bool nl_pending;
     struct netjob *job;          /* running network command */
     struct proc *proc;           /* running user program */
+    struct update *upd;          /* NimbusUpdate (the 'update' command) */
 };
 
-static window_t *cur_win;        /* terminal executing a command (for out()) */
+static window_t *cur_win;
+
+static bool upd_busy(struct term *t)
+{
+    if (!t->upd) return false;
+    enum update_phase ph = update_phase(t->upd);
+    return ph == UPD_CHECKING || ph == UPD_DOWNLOADING;
+}        /* terminal executing a command (for out()) */
 
 static int term_cols(window_t *w) { return MAX(10, MIN(MAXCOL, (w->surface->w - 2 * PAD - 16) / FONT_W)); }
 static int term_rows(window_t *w) { return MAX(2, (w->surface->h - 2 * PAD) / FONT_H); }
@@ -127,7 +138,7 @@ static void paint(window_t *w)
     snprintf(prompt, sizeof prompt, "nimbus:%s$ ", t->cwd);
     /* No prompt while a command runs; a running program's input is typed
      * at the end of its last output line, like on a real terminal. */
-    bool extra = t->proc ? (t->nl_pending || !t->count) : !t->job;
+    bool extra = t->proc ? (t->nl_pending || !t->count) : !t->job && !upd_busy(t);
     int total = t->count + (extra ? 1 : 0);
     int first = MAX(0, total - rows - t->view);
     for (int r = 0; r < rows && first + r < total; r++) {
@@ -230,6 +241,7 @@ static void cmd_help(struct term *t, int argc, char **argv)
         "  ping <host> [n]     ICMP echo;  nslookup <name>   DNS lookup",
         "  wget <url> [file]   download over HTTP(S);  http <url>  print a page",
         "  history / exit / shutdown / reboot / uname",
+        "  update [install]    check for / install a NimbusOS update (update url <url>)",
         "",
         "Programs: any ELF64 executable runs as a user-mode process, e.g. the",
         "samples in /Programs: hello, primes, guess, mandel, wc, todo, sysinfo,",
@@ -520,7 +532,7 @@ static void cmd_volume(struct term *t, int argc, char **argv)
         sound_available() ? "AC'97 sound card" : "no sound card");
 }
 
-static void cmd_uname(struct term *t, int argc, char **argv) { out(C_FG, "NimbusOS 0.2 x86_64 (64-bit long mode)\n"); }
+static void cmd_uname(struct term *t, int argc, char **argv) { out(C_FG, "NimbusOS " NIMBUS_VERSION " x86_64 (64-bit long mode)\n"); }
 static void cmd_pwd(struct term *t, int argc, char **argv) { out(C_FG, "%s\n", t->cwd); }
 
 static const struct { const char *name; void (*fn)(struct term *, int, char **); } commands[] = {
@@ -570,6 +582,45 @@ static bool run_program(window_t *w, int argc, char **argv)
     if (!t->proc) { out(C_ERR, "%s: %s\n", argv[0], why); return true; }
     wm_set_timer(w, 20);                       /* drain output / serve file requests */
     return true;
+}
+
+/* ---- the 'update' command (kernel/update.c does the work) ---- */
+static void upd_say(void *ctx, bool err, const char *msg)
+{
+    window_t *w = ctx;
+    if (!wm_window_alive(w)) return;
+    cur_win = w;
+    out(err ? C_ERR : C_FG, "%s\n", msg);
+}
+
+static void cmd_update(window_t *w, int argc, char **argv)
+{
+    struct term *t = w->app;
+    if (argc >= 2 && !strcmp(argv[1], "url")) {
+        if (argc >= 3) { update_set_server(argv[2]); out(C_FG, "Update server set to %s\n", argv[2]); }
+        else out(C_FG, "Update server: %s\n", update_server());
+        return;
+    }
+    bool install = argc >= 2 && !strcmp(argv[1], "install");
+    if (argc >= 2 && !install && strcmp(argv[1], "check")) { out(C_ERR, "usage: update [check | install | url [<url>]]\n"); return; }
+    if (!t->upd) t->upd = update_new(upd_say, w);
+    if (!t->upd) { out(C_ERR, "update: out of memory\n"); return; }
+    out(C_FG, "NimbusOS %s, update server %s\n", NIMBUS_VERSION, update_server());
+    update_check(t->upd, install);
+    wm_set_timer(w, 50);
+}
+
+/* Called on the Terminal's timer while an update runs. */
+static void poll_update(window_t *w)
+{
+    struct term *t = w->app;
+    cur_win = w;
+    update_poll(t->upd);
+    if (upd_busy(t)) return;
+    enum update_phase ph = update_phase(t->upd);
+    if (ph == UPD_AVAILABLE) out(C_FG, "Type 'update install' to install it.\n");
+    if (ph == UPD_DONE && update_needs_restart(t->upd)) out(C_PROMPT, "Type 'reboot' to restart into NimbusOS %s.\n", update_new_version(t->upd));
+    wm_set_timer(w, 530);
 }
 
 /* Called on the Terminal's timer while a program runs. */
@@ -668,6 +719,7 @@ static void execute(window_t *w, const char *cmdline)
         wm_set_timer(w, 50);                   /* drain its output quickly */
         return;
     }
+    if (!strcmp(argv[0], "update")) { cmd_update(w, argc, argv); return; }
     if (run_program(w, argc, argv)) return;
     out(C_ERR, "%s: command not found (try 'help')\n", argv[0]);
 }
@@ -702,6 +754,11 @@ static void on_event(window_t *w, event_t *ev)
     case EV_RESIZE: t->cols = term_cols(w); break;
     case EV_FOCUS: case EV_BLUR: paint(w); break;
     case EV_TIMER:
+        if (upd_busy(t)) {
+            poll_update(w);
+            paint(w);
+            break;
+        }
         if (t->proc) {
             cur_win = w;
             poll_program(w);
@@ -742,6 +799,7 @@ static void on_event(window_t *w, event_t *ev)
         struct key_event *k = &ev->key;
         if (!k->pressed) break;
         t->blink = true;
+        if (upd_busy(t)) break;                        /* typing is ignored while updating */
         if (t->proc) { cur_win = w; poll_program(w); }   /* it may have just ended */
         if (t->proc) {                        /* typing goes to the running program */
             cur_win = w;
@@ -803,6 +861,7 @@ static void on_event(window_t *w, event_t *ev)
     case EV_DESTROY:
         if (t->job) { netjob_cancel(t->job); netjob_release(t->job); }
         if (t->proc) proc_release(t->proc);
+        update_free(t->upd);
         kfree(t->lines); kfree(t->capture); kfree(t);
         break;
     }

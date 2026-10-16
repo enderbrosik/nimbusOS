@@ -1,4 +1,5 @@
 /* NimbusOS - kernel main. */
+#include "kernel/version.h"
 #include "kernel/types.h"
 #include "kernel/kprintf.h"
 #include "kernel/string.h"
@@ -79,7 +80,7 @@ void kmain(struct bootinfo *bi)
     serial_init();
     vga_init();
     vga_setcolor(VGA_LCYAN, VGA_BLACK);
-    kprintf("NimbusOS 0.1 - booting\n");
+    kprintf("NimbusOS " NIMBUS_VERSION " - booting\n");
     vga_setcolor(VGA_LGREY, VGA_BLACK);
 
     if (!bi || bi->magic != BOOTINFO_MAGIC) panic("bad boot info (magic %08x)", bi ? bi->magic : 0);

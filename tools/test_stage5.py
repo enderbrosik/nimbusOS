@@ -99,5 +99,5 @@ with Qemu([IMG], name="stage5-restart") as q:
     q.wait_serial(r"Desktop ready", timeout=40)
     q.key("meta_l"); q.key("up"); q.key("up"); q.key("ret")
     q.wait_serial(r"restarting", 10)
-    q.wait_serial(r"(?s)restarting.*NimbusOS 0.1 - booting", 30)
+    q.wait_serial(r"(?s)restarting.*NimbusOS [0-9.]+ - booting", 30)
 print("stage5: PASS")

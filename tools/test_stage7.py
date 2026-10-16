@@ -65,7 +65,7 @@ with Qemu([LIVE, TARGET], name="stage7-install") as q:
     time.sleep(0.3)
     q.screenshot(f"{S}/stage7-5-done.png")
     q.click(*CANCEL)                                     # "Restart"
-    q.wait_serial(r"(?s)restarting.*NimbusOS 0.1 - booting", 30)
+    q.wait_serial(r"(?s)restarting.*NimbusOS [0-9.]+ - booting", 30)
 
 assert hashlib.sha256(head_bytes(LIVE, 4096 * 512)).hexdigest() == live_boot_before, "live boot area modified!"
 mbr = head_bytes(TARGET, 512)

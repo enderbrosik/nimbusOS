@@ -155,6 +155,53 @@ int main(void)
         else printf("ok   aes128-gcm open\n");
     }
 
+    /* SHA-512, FIPS 180-2 examples */
+    sha512("abc", 3, out);
+    check("sha512 abc", out, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
+    sha512("", 0, out);
+    check("sha512 empty", out, "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e");
+    {
+        const char *m = "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu";
+        sha512(m, strlen(m), out);
+        check("sha512 896-bit", out, "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909");
+    }
+
+    /* Ed25519, RFC 8032 section 7.1 tests 1, 2 and 3 */
+    {
+        static const struct { const char *sk, *pk, *msg, *sig; } t[] = {
+            { "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+              "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a", "",
+              "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b" },
+            { "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+              "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c", "72",
+              "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00" },
+            { "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+              "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025", "af82",
+              "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a" },
+        };
+        for (unsigned i = 0; i < sizeof t / sizeof t[0]; i++) {
+            u8 sk[32], pk[32], msg[16], sig[64], want_sig[64];
+            size_t ml;
+            hex(t[i].sk, sk, NULL);
+            hex(t[i].msg, msg, &ml);
+            hex(t[i].sig, want_sig, NULL);
+            char name[64];
+            ed25519_public_key(pk, sk);
+            snprintf(name, sizeof name, "ed25519 #%u public key", i + 1);
+            check(name, pk, t[i].pk);
+            ed25519_sign(sig, msg, ml, sk, pk);
+            snprintf(name, sizeof name, "ed25519 #%u signature", i + 1);
+            check(name, sig, t[i].sig);
+            checks++;
+            if (ed25519_verify(want_sig, msg, ml, pk)) { fails++; printf("FAIL ed25519 #%u verify\n", i + 1); }
+            else printf("ok   ed25519 #%u verify\n", i + 1);
+            want_sig[10] ^= 4;
+            checks++;
+            if (!ed25519_verify(want_sig, msg, ml, pk)) { fails++; printf("FAIL ed25519 #%u accepted a bad signature\n", i + 1); }
+            else printf("ok   ed25519 #%u rejects a bad signature\n", i + 1);
+        }
+    }
+
     printf("cryptotest: %d/%d checks passed\n", checks - fails, checks);
     return fails ? 1 : 0;
 }

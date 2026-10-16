@@ -1,4 +1,5 @@
 /* NimbusOS - System Properties window (desktop "Properties"). */
+#include "kernel/version.h"
 #include "apps/apps.h"
 #include "gui/wm.h"
 #include "gui/widgets.h"
@@ -32,7 +33,7 @@ static void paint(window_t *w)
     gfx_fill_rect(s, 0, 0, s->w, s->h, 0xFFFFFF);
     gfx_gradient_v(s, 0, 0, s->w, 70, RGB(0, 84, 166), RGB(0, 120, 215));
     icon_draw(s, ICON_COMPUTER, 20, 18);
-    gfx_ui_text_bold(s, 66, 18, "NimbusOS 1.0", 0xFFFFFF);
+    gfx_ui_text_bold(s, 66, 18, "NimbusOS " NIMBUS_VERSION, 0xFFFFFF);
     gfx_ui_text(s, 66, 38, "A hobby operating system, written from scratch", RGB(220, 235, 255));
     int y = 86;
     line(s, y, "Processor", "x86-64, 64-bit long mode"); y += 22;

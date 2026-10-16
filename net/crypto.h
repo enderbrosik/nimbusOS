@@ -54,6 +54,16 @@ void aes128_gcm_seal(const u8 key[16], const u8 nonce[12], const u8 *ad, size_t 
 int  aes128_gcm_open(const u8 key[16], const u8 nonce[12], const u8 *ad, size_t adlen,
                      const u8 *ct_and_tag, size_t len_with_tag, u8 *pt);
 
+/* ---- SHA-512 and Ed25519 (RFC 8032) ---- */
+struct sha512 { u64 h[8]; u8 buf[128]; u64 len; u32 n; };
+void sha512_init(struct sha512 *s);
+void sha512_update(struct sha512 *s, const void *data, size_t len);
+void sha512_final(struct sha512 *s, u8 out[64]);
+void sha512(const void *data, size_t len, u8 out[64]);
+int  ed25519_verify(const u8 sig[64], const void *msg, size_t len, const u8 pub[32]);   /* 0 = valid */
+void ed25519_public_key(u8 pub[32], const u8 seed[32]);
+void ed25519_sign(u8 sig[64], const void *msg, size_t len, const u8 seed[32], const u8 pub[32]);
+
 /* constant-time comparison: 0 if equal */
 int crypto_memcmp(const void *a, const void *b, size_t n);
 #endif
