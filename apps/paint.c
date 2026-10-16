@@ -2,10 +2,13 @@
  * NimbusOS - Paint.
  *
  * Tools: pencil, brush, eraser, line, rectangle, filled rectangle, flood
- * fill and colour picker; a 28-colour palette (left click = primary colour,
- * right click = secondary colour); brush sizes; Clear.  Pictures are saved
- * and loaded as 24-bit uncompressed BMP files.  Shapes show a live preview
- * that is only committed to the canvas when the mouse button is released.
+ * fill and colour picker; a palette with a transparent pen (the first swatch,
+ * drawn as a checkerboard) and 28 colours (left click = primary colour,
+ * right click = secondary colour); brush sizes; Clear; Size, which changes the
+ * canvas size from presets (32x32 up to 3840x2160) or a typed size.  Pictures
+ * are saved as uncompressed BMP files: 24-bit, or 32-bit with alpha when the
+ * picture has transparent pixels.  Shapes show a live preview that is only
+ * committed to the canvas when the mouse button is released.
  */
 #include "apps/apps.h"
 #include "gui/wm.h"
@@ -27,16 +30,53 @@
 
 enum { T_PENCIL, T_BRUSH, T_ERASER, T_LINE, T_RECT, T_FILLRECT, T_FILL, T_PICK, NTOOLS };
 static const char *tool_names[NTOOLS] = { "Pencil", "Brush", "Eraser", "Line", "Rectangle", "Filled Rectangle", "Fill", "Pick Colour" };
-enum { B_NEW, B_OPEN, B_SAVE, B_SAVEAS, B_CLEAR, NBTN };
+enum { B_NEW, B_OPEN, B_SAVE, B_SAVEAS, B_CLEAR, B_SIZE, NBTN };
 enum { AFTER_NONE, AFTER_NEW, AFTER_OPEN, AFTER_CLOSE };
 
-static const u32 palette[28] = {
+#define NPAL 29
+static const u32 palette[NPAL] = {
+    PIXEL_CLEAR,   /* transparent pen */
     0x000000, 0x7F7F7F, 0x880015, 0xED1C24, 0xFF7F27, 0xFFF200, 0x22B14C, 0x00A2E8, 0x3F48CC, 0xA349A4,
     0x6B3E1E, 0x2F4F4F, 0x004080, 0x408080,
     0xFFFFFF, 0xC3C3C3, 0xB97A57, 0xFFAEC9, 0xFFC90E, 0xEFE4B0, 0xB5E61D, 0x99D9EA, 0x7092BE, 0xC8BFE7,
     0xF0B070, 0x80FF80, 0x80C0FF, 0xFF80C0,
 };
 static const int sizes[4] = { 1, 3, 6, 10 };
+
+/* canvas size presets, in the order the Size dialog shows them */
+static const int preset_w[] = { 32, 64, 128, 256, 512, 640, 800, 1024, 1280, 1920, 3840 };
+static const int preset_h[] = { 32, 64, 128, 256, 512, 400, 600, 768, 720, 1080, 2160 };
+#define NPRESET ((int)(sizeof preset_w / sizeof preset_w[0]))
+#define MAX_CANVAS_W 3840
+#define MAX_CANVAS_H 2160
+
+/* light checkerboard: what a transparent pixel looks like on screen */
+static u32 checker(int x, int y, int shift)
+{
+    return ((x >> shift) + (y >> shift)) & 1 ? 0xCCCCCC : 0xFFFFFF;
+}
+
+/* a colour swatch; transparent colours show the checkerboard */
+static void draw_swatch(surface_t *s, rect_t r, u32 c)
+{
+    if (c != PIXEL_CLEAR) { gfx_fill_rect(s, r.x, r.y, r.w, r.h, c); return; }
+    for (int y = r.y; y < r.y + r.h; y++)
+        for (int x = r.x; x < r.x + r.w; x++) gfx_fill_rect(s, x, y, 1, 1, checker(x, y, 2));
+}
+
+/* copies the canvas into the view (clipped); transparent pixels show the checkerboard */
+static void draw_canvas(surface_t *s, int x0, int y0, surface_t *src)
+{
+    rect_t r = rect_intersect(rect_make(x0, y0, src->w, src->h), s->clip);
+    for (int y = r.y; y < r.y + r.h; y++) {
+        const u32 *sp = src->px + (y - y0) * src->pitch + (r.x - x0);
+        u32 *dp = s->px + y * s->pitch + r.x;
+        for (int x = 0; x < r.w; x++) {
+            u32 c = sp[x];
+            dp[x] = c == PIXEL_CLEAR ? checker(r.x + x - x0, y - y0, 3) : c;
+        }
+    }
+}
 
 struct paint {
     surface_t *canvas;
@@ -119,7 +159,14 @@ static rect_t size_rect(int i) { return rect_make(8, TOOLBAR_H + 8 + 4 * 27 + 10
 static rect_t palette_rect(window_t *w, int i)
 {
     int y0 = w->surface->h - STATUS_H - PALETTE_H + 6;
-    return rect_make(56 + (i % 14) * 20, y0 + (i / 14) * 19, 18, 17);
+    return rect_make(56 + (i % 15) * 20, y0 + (i / 15) * 19, 18, 17);
+}
+
+/* the colour of the shape being drawn; a transparent preview is shown grey */
+static u32 draw_colour(struct paint *p, bool preview)
+{
+    u32 c = p->draw_button == MOUSE_RIGHT ? p->bg : p->fg;
+    return preview && c == PIXEL_CLEAR ? 0x808080 : c;
 }
 
 /* draws a shape (or a stroke segment) onto surface s, offset by (dx,dy) */
@@ -183,9 +230,9 @@ static void refresh_region(window_t *w, rect_t cr)
     if (rect_empty(sr)) return;
     rect_t old = s->clip;
     gfx_set_clip(s, sr);
-    gfx_blit(s, cx0, cy0, p->canvas, 0, 0, p->canvas->w, p->canvas->h);
+    draw_canvas(s, cx0, cy0, p->canvas);
     if (preview_active(p))
-        draw_shape(p, s, cx0, cy0, p->tool, p->sx, p->sy, p->cx, p->cy, p->draw_button == MOUSE_RIGHT ? p->bg : p->fg);
+        draw_shape(p, s, cx0, cy0, p->tool, p->sx, p->sy, p->cx, p->cy, draw_colour(p, true));
     s->clip = old;
     wm_invalidate_rect(w, sr);
 }
@@ -223,10 +270,10 @@ static void paint(window_t *w)
     gfx_set_clip(s, v);
     int cx0 = canvas_x(w), cy0 = canvas_y(w);
     gfx_blend_rect(s, cx0 + 3, cy0 + 3, p->canvas->w, p->canvas->h, 0, 60);
-    gfx_blit(s, cx0, cy0, p->canvas, 0, 0, p->canvas->w, p->canvas->h);
+    draw_canvas(s, cx0, cy0, p->canvas);
     if (p->drawing && (p->tool == T_LINE || p->tool == T_RECT || p->tool == T_FILLRECT)) {
         gfx_set_clip(s, rect_intersect(v, rect_make(cx0, cy0, p->canvas->w, p->canvas->h)));
-        draw_shape(p, s, cx0, cy0, p->tool, p->sx, p->sy, p->cx, p->cy, p->draw_button == MOUSE_RIGHT ? p->bg : p->fg);
+        draw_shape(p, s, cx0, cy0, p->tool, p->sx, p->sy, p->cx, p->cy, draw_colour(p, true));
     }
     s->clip = old;
     /* scrollbars */
@@ -242,14 +289,14 @@ static void paint(window_t *w)
     int py = s->h - STATUS_H - PALETTE_H;
     gfx_fill_rect(s, TOOLBOX_W, py, s->w - TOOLBOX_W, PALETTE_H, RGB(236, 238, 243));
     gfx_hline(s, TOOLBOX_W, py, s->w - TOOLBOX_W, RGB(205, 208, 216));
-    gfx_fill_rect(s, 20, py + 18, 22, 22, p->bg);
+    draw_swatch(s, rect_make(20, py + 18, 22, 22), p->bg);
     gfx_rect(s, 20, py + 18, 22, 22, 0x404040);
-    gfx_fill_rect(s, 10, py + 8, 22, 22, p->fg);
+    draw_swatch(s, rect_make(10, py + 8, 22, 22), p->fg);
     gfx_rect(s, 10, py + 8, 22, 22, 0x404040);
-    for (int i = 0; i < 28; i++) {
+    for (int i = 0; i < NPAL; i++) {
         rect_t r = palette_rect(w, i);
         r.x += TOOLBOX_W - 50;
-        gfx_fill_rect(s, r.x, r.y, r.w, r.h, palette[i]);
+        draw_swatch(s, r, palette[i]);
         gfx_rect(s, r.x, r.y, r.w, r.h, RGB(120, 120, 130));
     }
     draw_status(w);
@@ -305,6 +352,24 @@ static void new_canvas(window_t *w, int cw, int ch)
     p->dirty = false;
 }
 
+/* Changes the canvas size.  The picture keeps its top-left corner; new space is white. */
+static bool resize_canvas(window_t *w, int cw, int ch)
+{
+    struct paint *p = w->app;
+    surface_t *n = surface_create(cw, ch);
+    if (!n) return false;
+    gfx_fill_rect(n, 0, 0, cw, ch, 0xFFFFFF);
+    int ow = MIN(cw, p->canvas->w), oh = MIN(ch, p->canvas->h);
+    for (int y = 0; y < oh; y++) memcpy(n->px + y * n->pitch, p->canvas->px + y * p->canvas->pitch, ow * sizeof(u32));
+    surface_destroy(p->canvas);
+    p->canvas = n;
+    p->ox = p->oy = 0;
+    p->dirty = true;
+    klog("[pnt ] canvas size %dx%d\n", cw, ch);
+    paint(w);
+    return true;
+}
+
 static bool load_file(window_t *w, const char *path)
 {
     struct paint *p = w->app;
@@ -327,7 +392,7 @@ static void continue_after_save(window_t *w);
 static bool save_to(window_t *w, const char *path)
 {
     struct paint *p = w->app;
-    int r = bmp_save(path, p->canvas);
+    int r = bmp_save_alpha(path, p->canvas);
     if (r) {
         char m[200];
         snprintf(m, sizeof m, "Cannot save \"%s\": %s.", path, nbfs_strerror(r));
@@ -410,13 +475,148 @@ static void guarded(window_t *w, int what)
 static void layout(window_t *w)
 {
     struct paint *p = w->app;
-    static const char *labels[NBTN] = { "New", "Open", "Save", "Save As", "Clear" };
+    static const char *labels[NBTN] = { "New", "Open", "Save", "Save As", "Clear", "Size" };
     int x = 4;
     for (int i = 0; i < NBTN; i++) {
         int bw = 16 + gfx_text_width(labels[i]);
         p->btn[i] = (ui_btn_t){ rect_make(x, 3, bw, TOOLBAR_H - 6), i, labels[i], -1, false };
         x += bw + 4;
     }
+}
+
+/* ------------------------------------------------------------ canvas size */
+#define SZ_W 380
+#define SZ_H 250
+#define SZ_FIELD rect_make(16, 190, 200, 26)
+
+struct sizedlg {
+    window_t *owner;
+    int cur_w, cur_h;
+    textfield_t tf;
+    char lbl[NPRESET][16];
+    ui_btn_t btn[NPRESET + 2];   /* presets, then Apply, Cancel */
+    char err[80];
+    int hover, pressed;
+};
+
+/* "800x600", "800 x 600", "800X600" or "800*600" */
+static bool parse_size(const char *s, int *w, int *h)
+{
+    int a = 0, b = 0;
+    while (*s == ' ') s++;
+    if (*s < '0' || *s > '9') return false;
+    while (*s >= '0' && *s <= '9') { a = a * 10 + (*s++ - '0'); if (a > 99999) return false; }
+    while (*s == ' ') s++;
+    if (*s != 'x' && *s != 'X' && *s != '*') return false;
+    s++;
+    while (*s == ' ') s++;
+    if (*s < '0' || *s > '9') return false;
+    while (*s >= '0' && *s <= '9') { b = b * 10 + (*s++ - '0'); if (b > 99999) return false; }
+    while (*s == ' ') s++;
+    if (*s) return false;
+    *w = a; *h = b;
+    return true;
+}
+
+static void sizedlg_paint(window_t *w)
+{
+    struct sizedlg *d = w->app;
+    surface_t *s = w->surface;
+    gfx_fill_rect(s, 0, 0, s->w, s->h, C_WINDOW_BG);
+    char t[64];
+    snprintf(t, sizeof t, "Current size: %d x %d. Choose a preset:", d->cur_w, d->cur_h);
+    gfx_ui_text(s, 16, 12, t, C_TEXT);
+    for (int i = 0; i < NPRESET + 2; i++)
+        ui_button(s, d->btn[i].r, d->btn[i].label,
+                  d->pressed == i ? BTN_PRESSED : d->hover == i ? BTN_HOVER : BTN_NORMAL);
+    gfx_ui_text(s, 16, 170, "Custom size (width x height):", C_TEXT);
+    tf_draw(s, SZ_FIELD, &d->tf, true);
+    if (d->err[0]) gfx_ui_text(s, 16, 224, d->err, RGB(200, 40, 40));
+    wm_invalidate(w);
+}
+
+static void sizedlg_apply(window_t *w, struct sizedlg *d, int cw, int ch)
+{
+    if (!wm_window_alive(d->owner)) { wm_destroy_window(w); return; }
+    if (cw < 1 || ch < 1 || cw > MAX_CANVAS_W || ch > MAX_CANVAS_H)
+        snprintf(d->err, sizeof d->err, "Use 1 to %d wide and 1 to %d high.", MAX_CANVAS_W, MAX_CANVAS_H);
+    else if (!resize_canvas(d->owner, cw, ch))
+        strlcpy(d->err, "Not enough memory for that size.", sizeof d->err);
+    else { wm_destroy_window(w); return; }   /* d is freed now: do not touch it */
+    sizedlg_paint(w);
+}
+
+static void sizedlg_custom(window_t *w, struct sizedlg *d)
+{
+    int cw, ch;
+    if (!parse_size(d->tf.text, &cw, &ch)) {
+        strlcpy(d->err, "Type a size such as 800x600.", sizeof d->err);
+        sizedlg_paint(w);
+        return;
+    }
+    sizedlg_apply(w, d, cw, ch);
+}
+
+static void sizedlg_event(window_t *w, event_t *e)
+{
+    struct sizedlg *d = w->app;
+    switch (e->type) {
+    case EV_PAINT: sizedlg_paint(w); break;
+    case EV_MOUSE_MOVE: {
+        int h = ui_btn_hit(d->btn, NPRESET + 2, e->x, e->y);
+        if (h != d->hover) { d->hover = h; sizedlg_paint(w); }
+        break;
+    }
+    case EV_MOUSE_DOWN:
+        d->pressed = ui_btn_hit(d->btn, NPRESET + 2, e->x, e->y);
+        if (rect_contains(SZ_FIELD, e->x, e->y)) tf_click(&d->tf, SZ_FIELD, e->x);
+        sizedlg_paint(w);
+        break;
+    case EV_MOUSE_UP: {
+        int p = d->pressed;
+        d->pressed = -1;
+        if (p >= 0 && ui_btn_hit(d->btn, NPRESET + 2, e->x, e->y) == p) {
+            if (p == NPRESET + 1) { wm_destroy_window(w); return; }
+            if (p == NPRESET) { sizedlg_custom(w, d); return; }
+            sizedlg_apply(w, d, preset_w[p], preset_h[p]);
+            return;
+        }
+        sizedlg_paint(w);
+        break;
+    }
+    case EV_KEY:
+        if (!e->key.pressed) break;
+        if (e->key.key == KEY_ENTER) { sizedlg_custom(w, d); return; }
+        if (e->key.key == KEY_ESC) { wm_destroy_window(w); return; }
+        if (tf_key(&d->tf, &e->key)) sizedlg_paint(w);
+        break;
+    case EV_CLOSE: wm_destroy_window(w); break;
+    case EV_DESTROY: kfree(d); break;
+    }
+}
+
+static void size_dialog(window_t *owner)
+{
+    struct paint *p = owner->app;
+    struct sizedlg *d = kzalloc(sizeof *d);
+    if (!d) return;
+    d->owner = owner;
+    d->cur_w = p->canvas->w;
+    d->cur_h = p->canvas->h;
+    d->hover = d->pressed = -1;
+    char init[32];
+    snprintf(init, sizeof init, "%d x %d", d->cur_w, d->cur_h);
+    tf_set(&d->tf, init);
+    for (int i = 0; i < NPRESET; i++) {
+        snprintf(d->lbl[i], sizeof d->lbl[i], "%d x %d", preset_w[i], preset_h[i]);
+        d->btn[i] = (ui_btn_t){ rect_make(16 + (i % 3) * 120, 36 + (i / 3) * 32, 112, 26), i, d->lbl[i], -1, false };
+    }
+    d->btn[NPRESET] = (ui_btn_t){ rect_make(226, 190, 64, 26), NPRESET, "Apply", -1, false };
+    d->btn[NPRESET + 1] = (ui_btn_t){ rect_make(298, 190, 66, 26), NPRESET + 1, "Cancel", -1, false };
+    window_t *win = wm_create("Canvas Size", ICON_PAINT, SZ_W, SZ_H, WF_DIALOG | WF_NO_TASKBAR, sizedlg_event, d);
+    if (!win) { kfree(d); return; }
+    wm_center(win);
+    wm_set_modal(owner, win);
 }
 
 static void begin_stroke(window_t *w, int button)
@@ -461,7 +661,7 @@ static void on_event(window_t *w, event_t *ev)
         if (ev->button == MOUSE_LEFT && (p->pressed = ui_btn_hit(p->btn, NBTN, ev->x, ev->y)) >= 0) { paint(w); break; }
         for (int t = 0; t < NTOOLS; t++) if (rect_contains(tool_rect(t), ev->x, ev->y)) { p->tool = t; klog("[pnt ] tool %s\n", tool_names[t]); }
         for (int i = 0; i < 4; i++) if (rect_contains(size_rect(i), ev->x, ev->y)) p->size_idx = i;
-        for (int i = 0; i < 28; i++) {
+        for (int i = 0; i < NPAL; i++) {
             rect_t r = palette_rect(w, i);
             r.x += TOOLBOX_W - 50;
             if (rect_contains(r, ev->x, ev->y)) { if (ev->button == MOUSE_RIGHT) p->bg = palette[i]; else p->fg = palette[i]; }
@@ -525,6 +725,7 @@ static void on_event(window_t *w, event_t *ev)
             else if (b == B_OPEN) guarded(w, AFTER_OPEN);
             else if (b == B_SAVE) save(w);
             else if (b == B_SAVEAS) save_as(w);
+            else if (b == B_SIZE) size_dialog(w);
             else { gfx_fill_rect(p->canvas, 0, 0, p->canvas->w, p->canvas->h, p->bg); p->dirty = true; klog("[pnt ] cleared\n"); }
         }
         paint(w);
@@ -537,6 +738,7 @@ static void on_event(window_t *w, event_t *ev)
             if (k->key == 's') { if (k->mods & MOD_SHIFT) save_as(w); else save(w); }
             else if (k->key == 'o') guarded(w, AFTER_OPEN);
             else if (k->key == 'n') guarded(w, AFTER_NEW);
+            else if (k->key == 'w') size_dialog(w);
         } else if (k->key >= '1' && k->key <= '8') {
             p->tool = k->key - '1';
             paint(w);

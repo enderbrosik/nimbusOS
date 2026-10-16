@@ -106,7 +106,7 @@ with Qemu([IMG], name="stage6-paint") as q:
     wx, wy = 81, 77                       # client origin of the first window
     ox, oy = wx + 68, wy + 36             # canvas origin
     tool = lambda t: (wx + 6 + (t % 2) * 27 + 12, wy + 32 + 8 + (t // 2) * 27 + 12)
-    pal = lambda i: (wx + 14 + 56 + (i % 14) * 20 + 9, wy + 540 - 20 - 48 + 6 + (i // 14) * 19 + 8)
+    pal = lambda i: (wx + 14 + 56 + ((i + 1) % 15) * 20 + 9, wy + 540 - 20 - 48 + 6 + ((i + 1) // 15) * 19 + 8)   # i+1: slot 0 is the transparent pen
     q.drag(ox + 20, oy + 20, ox + 200, oy + 120, steps=6)            # pencil (black)
     q.click(*tool(1)); q.click(*pal(3))                              # brush, red
     q.drag(ox + 40, oy + 200, ox + 300, oy + 160, steps=6)
