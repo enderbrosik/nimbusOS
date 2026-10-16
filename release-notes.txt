@@ -1,3 +1,6 @@
-# One line per note; shown in Nimbus Update. Lines starting with # are ignored.
-Nimbus Update: signed system updates over HTTPS
-Kernel updates use two boot slots, so a failed update never stops NimbusOS from starting
+# One line per note; shown on the download page and in Nimbus Update. Lines starting with # are ignored.
+UI scale from 75% to 200%, set in Settings > Appearance (sharp scaling of windows, text and icons)
+Display resolutions from 180p to 4K, named and with aspect ratios, in a scrollable list
+Nimbus Update: signed system updates from nimbusos.vercel.app, with two kernel slots so an update can't break booting
+Nimbus Update only contacts nimbusos.vercel.app
+Mouse wheel scrolls the resolution list
