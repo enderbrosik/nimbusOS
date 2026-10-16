@@ -32,10 +32,18 @@ enum { PG_DISPLAY, PG_APPEARANCE, PG_MOUSE, PG_SOUND, PG_NETWORK, PG_TIME, NPAGE
 static const char *page_names[NPAGES] = { "Display", "Appearance", "Mouse", "Sound", "Network", "Date & Time" };
 static const int page_icons[NPAGES] = { ICON_COMPUTER, ICON_WALLPAPER, ICON_SETTINGS, ICON_AUDIO, ICON_NETWORK, ICON_INFO };
 
-static const struct { int w, h; } modes[] = {
-    { 800, 600 }, { 1024, 768 }, { 1280, 720 }, { 1280, 800 }, { 1280, 1024 },
-    { 1366, 768 }, { 1440, 900 }, { 1600, 900 }, { 1680, 1050 }, { 1920, 1080 },
+/* Resolutions, smallest first. The name is shown as "1920 x 1080  (1080p, 16:9)". */
+static const struct { int w, h; const char *name, *ratio; } modes[] = {
+    { 320, 180, "180p", "16:9" },      { 426, 240, "240p", "16:9" },      { 640, 360, "360p", "16:9" },
+    { 854, 480, "480p", "16:9" },      { 800, 600, "SVGA", "4:3" },       { 1024, 768, "XGA", "4:3" },
+    { 1280, 720, "720p", "16:9" },     { 1280, 800, "WXGA", "16:10" },    { 1280, 1024, "SXGA", "5:4" },
+    { 1366, 768, "", "16:9" },         { 1440, 900, "WXGA+", "16:10" },   { 1600, 900, "900p", "16:9" },
+    { 1680, 1050, "WSXGA+", "16:10" }, { 1920, 1080, "1080p", "16:9" },   { 1920, 1200, "WUXGA", "16:10" },
+    { 2560, 1080, "UltraWide", "21:9" }, { 2560, 1440, "1440p", "16:9" }, { 3840, 2160, "4K", "16:9" },
+    { 1080, 1080, "Square", "1:1" },   { 1080, 1350, "", "4:5" },         { 1080, 1620, "", "2:3" },
+    { 1620, 1080, "", "3:2" },         { 1080, 1920, "Portrait", "9:16" },
 };
+#define MODE_ROWS 14                    /* visible rows of the resolution list */
 static const u32 accents[8] = {
     RGB(0, 120, 215), RGB(16, 124, 16), RGB(194, 57, 52), RGB(135, 100, 184),
     RGB(202, 80, 16), RGB(0, 153, 188), RGB(232, 17, 123), RGB(76, 74, 72),
@@ -47,6 +55,7 @@ static const int dbl_times[3] = { 300, 450, 650 };
 struct settings_app {
     int page;
     int sel_mode;
+    int mode_scroll;                /* first resolution shown in the list */
     rect_t apply_btn, wall_btn, tz_minus, tz_plus, vol_bar, test_btn, renew_btn;
     struct netjob *job;
     bool drag_vol;
@@ -88,14 +97,22 @@ static void paint(window_t *w)
     case PG_DISPLAY: {
         heading(s, c, "Display resolution");
         int y = c.y + 34;
-        for (unsigned i = 0; i < ARRAY_SIZE(modes); i++) {
+        int last = MIN(a->mode_scroll + MODE_ROWS, (int)ARRAY_SIZE(modes));
+        for (int i = a->mode_scroll; i < last; i++) {
             bool ok = fb_mode_supported(modes[i].w, modes[i].h);
-            snprintf(b, sizeof b, "%d x %d%s%s", modes[i].w, modes[i].h,
-                     modes[i].w == SCREEN_W && modes[i].h == SCREEN_H ? "   (current)" : "",
-                     ok ? "" : "   (not enough video memory)");
-            ui_radio(s, c.x, y, (int)i == a->sel_mode, NULL);
+            bool current = modes[i].w == SCREEN_W && modes[i].h == SCREEN_H;
+            char tag[48];
+            if (modes[i].name[0]) snprintf(tag, sizeof tag, "%s, %s", modes[i].name, modes[i].ratio);
+            else snprintf(tag, sizeof tag, "%s", modes[i].ratio);
+            snprintf(b, sizeof b, "%4d x %-4d  (%s)%s%s", modes[i].w, modes[i].h, tag,
+                     current ? "   current" : "", ok ? "" : "   needs more video memory");
+            ui_radio(s, c.x, y, i == a->sel_mode, NULL);
             gfx_ui_text(s, c.x + 22, y, b, ok ? C_TEXT : C_TEXT_DIM);
             y += ROW;
+        }
+        if (ARRAY_SIZE(modes) > MODE_ROWS) {
+            snprintf(b, sizeof b, "%d-%d of %d, wheel scrolls", a->mode_scroll + 1, last, (int)ARRAY_SIZE(modes));
+            gfx_ui_text(s, c.x + c.w - 170, c.y, b, C_TEXT_DIM);
         }
         snprintf(b, sizeof b, "Video memory: %u MiB", fb_vram_bytes() >> 20);
         gfx_ui_text(s, c.x, y + 6, b, C_TEXT_DIM);
@@ -292,6 +309,13 @@ static void apply_mode(window_t *w)
 
 static void on_event(window_t *w, event_t *e)
 {
+    if (e->type == EV_WHEEL && ((struct settings_app *)w->app)->page == PG_DISPLAY) {
+        struct settings_app *a = w->app;
+        int max = MAX(0, (int)ARRAY_SIZE(modes) - MODE_ROWS);
+        a->mode_scroll = MAX(0, MIN(max, a->mode_scroll + e->wheel));
+        paint(w);
+        return;
+    }
     struct settings_app *a = w->app;
     rect_t c = content(w);
     switch (e->type) {
@@ -314,9 +338,9 @@ static void on_event(window_t *w, event_t *e)
         }
         switch (a->page) {
         case PG_DISPLAY: {
-            int i = (e->y - c.y - 34) / ROW;
-            if (e->y >= c.y + 34 && i >= 0 && i < (int)ARRAY_SIZE(modes) && e->x < c.x + 300 &&
-                fb_mode_supported(modes[i].w, modes[i].h)) a->sel_mode = i;
+            int i = a->mode_scroll + (e->y - c.y - 34) / ROW;
+            if (e->y >= c.y + 34 && (e->y - c.y - 34) / ROW < MODE_ROWS && i >= 0 && i < (int)ARRAY_SIZE(modes) &&
+                e->x < c.x + 360 && fb_mode_supported(modes[i].w, modes[i].h)) a->sel_mode = i;
             if (rect_contains(a->apply_btn, e->x, e->y)) { apply_mode(w); return; }
             break;
         }

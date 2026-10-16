@@ -30,7 +30,7 @@ u32 fb_vram_bytes(void) { return vram; }
 
 bool fb_mode_supported(int w, int h)
 {
-    return w >= 640 && h >= 480 && w <= FB_MAX_W && h <= FB_MAX_H && (u32)w * h * 4 <= vram;
+    return w >= 320 && h >= 180 && w <= FB_MAX_W && h <= FB_MAX_H && (u32)w * h * 4 <= vram;
 }
 
 bool fb_set_mode(int w, int h)

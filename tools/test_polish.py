@@ -60,7 +60,7 @@ with Qemu([IMG], name="polish") as q:
     q.key("ret")
     q.wait_serial(r'created: "Settings"', 5)
     sx, sy = 192, 159                          # centred 640x440 client at 1024x768
-    q.click(sx + 180, sy + 16 + 34 + 3 * 26 + 8)    # 1280 x 800
+    q.click(sx + 180, sy + 16 + 34 + 7 * 26 + 8)    # 1280 x 800 (row 7 of the list)
     q.click(sx + 574, sy + 408)                # Apply
     q.wait_serial(r"resolution changed to 1280x800", 5)
     q.mouse_home()                             # pointer was re-centred by the mode switch
@@ -69,7 +69,7 @@ with Qemu([IMG], name="polish") as q:
     q.click(450 + 210, 335 + 94)               # "Keep changes" (dialog centred at 1280x800)
     q.wait_serial(r"kept resolution 1280x800", 5)
     # ---- 800x600 then let the countdown revert it
-    q.click(sx + 180, sy + 16 + 34 + 0 * 26 + 8)
+    q.click(sx + 180, sy + 16 + 34 + 4 * 26 + 8)    # 800 x 600 (row 4)
     q.click(sx + 574, sy + 408)
     q.wait_serial(r"resolution changed to 800x600", 5)
     q.wait_serial(r"reverted to 1280x800", 20)

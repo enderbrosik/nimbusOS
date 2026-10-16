@@ -92,7 +92,8 @@ MKIMAGE := $(BUILD)/tools/mkimage
 # (pick one with e.g. `make run AUDIO=pa` / `AUDIO=alsa` / `AUDIO=sdl`).
 AUDIO   ?= $(if $(filter Darwin,$(shell uname -s)),coreaudio,none)
 QEMU_SND := -audiodev $(AUDIO),id=snd0 -device AC97,audiodev=snd0 -nic user,model=e1000
-QEMU_COMMON := -m 256M -vga std $(QEMU_SND) -drive file=$(IMG),format=raw,index=0,media=disk
+QEMU_VGA := -device VGA,vgamem_mb=64
+QEMU_COMMON := -m 256M $(QEMU_VGA) $(QEMU_SND) -drive file=$(IMG),format=raw,index=0,media=disk
 QEMU_EXTRA  ?=
 
 .PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso programs release keys deploy FORCE
@@ -237,7 +238,7 @@ $(ISO): $(CDIMG) $(MKISO)
 	$(MKISO) $@ $(CDIMG)
 
 run-iso: $(ISO)
-	$(QEMU) -m 256M -vga std $(QEMU_SND) -cdrom $(ISO) -boot d -serial stdio $(QEMU_EXTRA)
+	$(QEMU) -m 256M $(QEMU_VGA) $(QEMU_SND) -cdrom $(ISO) -boot d -serial stdio $(QEMU_EXTRA)
 
 run: $(IMG)
 	$(QEMU) $(QEMU_COMMON) -serial stdio $(QEMU_EXTRA)
@@ -258,13 +259,13 @@ $(TARGET_IMG): | $(NFSTOOL)
 
 installer-test: $(IMG) $(TARGET_IMG)
 	@echo "Live image: $(IMG) (Primary Master), blank target: $(TARGET_IMG) (Primary Slave)"
-	$(QEMU) -m 256M -vga std $(QEMU_SND) -drive file=$(IMG),format=raw,index=0,media=disk \
+	$(QEMU) -m 256M $(QEMU_VGA) $(QEMU_SND) -drive file=$(IMG),format=raw,index=0,media=disk \
 	        -drive file=$(TARGET_IMG),format=raw,index=1,media=disk -serial stdio $(QEMU_EXTRA)
 
 # Boot only the installed target disk.
 run-target:
 	@test -f $(TARGET_IMG) || (echo "no $(TARGET_IMG) - run make installer-test first" && false)
-	$(QEMU) -m 256M -vga std $(QEMU_SND) -drive file=$(TARGET_IMG),format=raw,index=0,media=disk -serial stdio $(QEMU_EXTRA)
+	$(QEMU) -m 256M $(QEMU_VGA) $(QEMU_SND) -drive file=$(TARGET_IMG),format=raw,index=0,media=disk -serial stdio $(QEMU_EXTRA)
 
 # Run every automated test (host FS suite + all QEMU stage tests).
 test-all: test $(IMG)

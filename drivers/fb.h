@@ -12,6 +12,6 @@ bool fb_init(int w, int h);
 bool fb_set_mode(int w, int h);            /* change resolution (after fb_init) */
 bool fb_mode_supported(int w, int h);
 u32  fb_vram_bytes(void);
-#define FB_MAX_W 1920
-#define FB_MAX_H 1200
+#define FB_MAX_W 3840
+#define FB_MAX_H 2160
 #endif
