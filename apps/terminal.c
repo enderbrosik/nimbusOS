@@ -21,6 +21,8 @@
 #include "kernel/task.h"
 #include "kernel/string.h"
 #include "kernel/kprintf.h"
+#include "kernel/sound.h"
+#include "kernel/settings.h"
 
 #define SCROLLBACK 500
 #define MAXCOL 160
@@ -205,6 +207,7 @@ static void cmd_help(struct term *t, int argc, char **argv)
         "  date / uptime       clock and uptime",
         "  fsck                check the file system",
         "  clear               clear the screen",
+        "  play <file.wav>     play a sound file (beep [hz] [ms], volume [0-100|mute])",
         "  history / exit / shutdown / reboot / uname",
     };
     for (unsigned i = 0; i < ARRAY_SIZE(h); i++) out(C_FG, "%s\n", h[i]);
@@ -466,6 +469,32 @@ static void cmd_echo(struct term *t, int argc, char **argv)
     out(C_FG, "\n");
 }
 
+static void cmd_play(struct term *t, int argc, char **argv)
+{
+    if (argc < 2) { out(C_ERR, "usage: play <file.wav>\n"); return; }
+    char p[NBFS_PATH_MAX];
+    abs_path(t, argv[1], p);
+    if (!vfs_exists(p)) { err("play", argv[1], NBFS_ENOENT); return; }
+    if (!sound_available()) { out(C_ERR, "play: no sound card\n"); return; }
+    mediaplayer_open(p);
+}
+
+static void cmd_beep(struct term *t, int argc, char **argv)
+{
+    u32 hz = argc > 1 ? (u32)atoi(argv[1]) : 880, ms = argc > 2 ? (u32)atoi(argv[2]) : 150;
+    sound_beep(hz, ms);
+}
+
+static void cmd_volume(struct term *t, int argc, char **argv)
+{
+    if (argc > 1) {
+        if (!strcmp(argv[1], "mute") || !strcmp(argv[1], "unmute")) sound_set_muted(argv[1][0] == 'm');
+        else { sound_set_volume(atoi(argv[1])); settings_set_int("volume", sound_volume()); }
+    }
+    out(C_FG, "volume %d%%%s, %s\n", sound_volume(), sound_muted() ? " (muted)" : "",
+        sound_available() ? "AC'97 sound card" : "no sound card");
+}
+
 static void cmd_uname(struct term *t, int argc, char **argv) { out(C_FG, "NimbusOS 1.0 i686 (32-bit protected mode)\n"); }
 static void cmd_pwd(struct term *t, int argc, char **argv) { out(C_FG, "%s\n", t->cwd); }
 
@@ -475,7 +504,8 @@ static const struct { const char *name; void (*fn)(struct term *, int, char **);
     { "del", cmd_rm }, { "touch", cmd_touch }, { "mv", cmd_mv }, { "cp", cmd_cp }, { "tree", cmd_tree },
     { "stat", cmd_stat }, { "df", cmd_df }, { "mem", cmd_mem }, { "free", cmd_mem }, { "ps", cmd_ps },
     { "date", cmd_date }, { "uptime", cmd_uptime }, { "fsck", cmd_fsck }, { "open", cmd_open },
-    { "history", cmd_history }, { "uname", cmd_uname },
+    { "history", cmd_history }, { "uname", cmd_uname }, { "play", cmd_play }, { "beep", cmd_beep },
+    { "volume", cmd_volume },
 };
 
 static void execute(window_t *w, const char *cmdline)

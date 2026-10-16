@@ -7,6 +7,7 @@
 #include "kernel/heap.h"
 #include "kernel/string.h"
 #include "kernel/kprintf.h"
+#include "kernel/sound.h"
 
 /* ======================================================================
  * Message box
@@ -97,6 +98,7 @@ window_t *msgbox(window_t *owner, const char *title, const char *text, int icon,
         m->btn[i].r = rect_make(w - (m->nb - i) * 92 - 4, h - 38, 84, 28);
     }
     window_t *win = wm_create(title, icon >= 0 ? icon : ICON_INFO, w, h, WF_DIALOG | WF_NO_TASKBAR, mb_event, m);
+    sound_event(icon == ICON_ERROR ? SND_ERROR : icon == ICON_WARNING ? SND_WARNING : SND_INFO);
     if (!win) { kfree(m); return NULL; }
     wm_center(win);
     if (owner) wm_set_modal(owner, win);

@@ -16,6 +16,7 @@ const struct app_def g_apps[APP_COUNT] = {
     [APP_MINES]     = { "Minesweeper", ICON_MINES, minesweeper_open, false },
     [APP_SNAKE]     = { "Snake", ICON_SNAKE, snake_open, false },
     [APP_SOLITAIRE] = { "Solitaire", ICON_CARDS, solitaire_open, false },
+    [APP_MEDIA]     = { "Media Player", ICON_AUDIO, mediaplayer_open, false },
     [APP_SETTINGS]  = { "Settings", ICON_SETTINGS, settings_open, true },
 };
 
@@ -39,5 +40,6 @@ void app_open_path(const char *path)
     if (vfs_is_dir(path)) { app_launch(APP_EXPLORER, path); return; }
     const char *dot = strrchr(path, '.');
     if (dot && !strcasecmp(dot, ".bmp")) app_launch(APP_PAINT, path);
+    else if (dot && !strcasecmp(dot, ".wav")) app_launch(APP_MEDIA, path);
     else app_launch(APP_NOTEPAD, path);
 }

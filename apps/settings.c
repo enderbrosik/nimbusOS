@@ -20,13 +20,15 @@
 #include "kernel/heap.h"
 #include "kernel/string.h"
 #include "kernel/kprintf.h"
+#include "kernel/sound.h"
+#include "drivers/ac97.h"
 
 #define NAV_W 150
 #define ROW 26
 
-enum { PG_DISPLAY, PG_APPEARANCE, PG_MOUSE, PG_TIME, NPAGES };
-static const char *page_names[NPAGES] = { "Display", "Appearance", "Mouse", "Date & Time" };
-static const int page_icons[NPAGES] = { ICON_COMPUTER, ICON_WALLPAPER, ICON_SETTINGS, ICON_INFO };
+enum { PG_DISPLAY, PG_APPEARANCE, PG_MOUSE, PG_SOUND, PG_TIME, NPAGES };
+static const char *page_names[NPAGES] = { "Display", "Appearance", "Mouse", "Sound", "Date & Time" };
+static const int page_icons[NPAGES] = { ICON_COMPUTER, ICON_WALLPAPER, ICON_SETTINGS, ICON_AUDIO, ICON_INFO };
 
 static const struct { int w, h; } modes[] = {
     { 800, 600 }, { 1024, 768 }, { 1280, 720 }, { 1280, 800 }, { 1280, 1024 },
@@ -43,7 +45,8 @@ static const int dbl_times[3] = { 300, 450, 650 };
 struct settings_app {
     int page;
     int sel_mode;
-    rect_t apply_btn, wall_btn, tz_minus, tz_plus;
+    rect_t apply_btn, wall_btn, tz_minus, tz_plus, vol_bar, test_btn;
+    bool drag_vol;
     /* "keep display settings?" countdown */
     window_t *confirm;
     int old_w, old_h, countdown;
@@ -127,6 +130,28 @@ static void paint(window_t *w)
             gfx_ui_text(s, c.x + 22, c.y + 210 + i * ROW, dn[i], C_TEXT);
         }
         gfx_ui_text(s, c.x, c.y + 300, "The mouse wheel scrolls lists, documents and the terminal.", C_TEXT_DIM);
+        break;
+    }
+    case PG_SOUND: {
+        heading(s, c, "Output device");
+        if (sound_available()) snprintf(b, sizeof b, "Intel AC'97 audio, %u Hz stereo", ac97_rate());
+        else snprintf(b, sizeof b, "No sound card found (QEMU: -device AC97)");
+        gfx_ui_text(s, c.x, c.y + 34, b, sound_available() ? C_TEXT : C_TEXT_DIM);
+        heading(s, rect_make(c.x, c.y + 70, c.w, 0), "Volume");
+        a->vol_bar = rect_make(c.x, c.y + 108, 260, 10);
+        gfx_round_rect(s, a->vol_bar.x, a->vol_bar.y, a->vol_bar.w, a->vol_bar.h, 4, RGB(220, 222, 228));
+        int vx = a->vol_bar.x + a->vol_bar.w * sound_volume() / 100;
+        gfx_round_rect(s, a->vol_bar.x, a->vol_bar.y, vx - a->vol_bar.x, a->vol_bar.h, 4, C_SELECT);
+        gfx_fill_circle(s, vx, a->vol_bar.y + 5, 8, C_SELECT);
+        snprintf(b, sizeof b, "%d%%", sound_volume());
+        gfx_ui_text(s, a->vol_bar.x + a->vol_bar.w + 16, a->vol_bar.y - 3, b, C_TEXT);
+        ui_checkbox(s, c.x, c.y + 136, sound_muted(), NULL);
+        gfx_ui_text(s, c.x + 20, c.y + 136, "Mute", C_TEXT);
+        heading(s, rect_make(c.x, c.y + 176, c.w, 0), "System sounds");
+        ui_checkbox(s, c.x, c.y + 210, settings_get_int("system_sounds", 1), NULL);
+        gfx_ui_text(s, c.x + 20, c.y + 210, "Play sounds for startup, dialogs and games", C_TEXT);
+        a->test_btn = rect_make(c.x, c.y + 244, 140, 28);
+        ui_button(s, a->test_btn, "Play test sound", sound_available() ? BTN_NORMAL : BTN_DISABLED);
         break;
     }
     case PG_TIME: {
@@ -288,6 +313,25 @@ static void on_event(window_t *w, event_t *e)
             }
             break;
         }
+        case PG_SOUND:
+            if (rect_contains(rect_make(a->vol_bar.x - 8, a->vol_bar.y - 8, a->vol_bar.w + 16, a->vol_bar.h + 16), e->x, e->y)) {
+                a->drag_vol = true;
+                sound_set_volume((e->x - a->vol_bar.x) * 100 / a->vol_bar.w);
+            }
+            if (rect_contains(rect_make(c.x, c.y + 134, 120, 20), e->x, e->y)) {
+                sound_set_muted(!sound_muted());
+                settings_set_int("muted", sound_muted());
+                taskbar_changed();
+            }
+            if (rect_contains(rect_make(c.x, c.y + 208, 360, 20), e->x, e->y))
+                settings_set_int("system_sounds", !settings_get_int("system_sounds", 1));
+            if (rect_contains(a->test_btn, e->x, e->y)) {
+                int was = settings_get_int("system_sounds", 1);
+                if (!was) settings_set_int("system_sounds", 1);
+                sound_event(SND_STARTUP);
+                if (!was) settings_set_int("system_sounds", 0);
+            }
+            break;
         case PG_TIME: {
             int tz = settings_get_int("tz_minutes", 0);
             if (rect_contains(a->tz_minus, e->x, e->y) && tz > -720) settings_set_int("tz_minutes", tz - 30);
@@ -301,6 +345,12 @@ static void on_event(window_t *w, event_t *e)
         paint(w);
         break;
     }
+    case EV_MOUSE_MOVE:
+        if (a->drag_vol) { sound_set_volume((e->x - a->vol_bar.x) * 100 / a->vol_bar.w); paint(w); }
+        break;
+    case EV_MOUSE_UP:
+        if (a->drag_vol) { a->drag_vol = false; settings_set_int("volume", sound_volume()); }
+        break;
     case EV_CLOSE: wm_destroy_window(w); break;
     case EV_DESTROY: kfree(a); set_win = NULL; break;
     }

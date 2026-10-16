@@ -49,14 +49,14 @@ with Qemu([IMG], name="polish") as q:
     # ---- a desktop file onto the Notepad icon opens it
     q.key("alt-f4")                            # close Explorer, it covers the icons
     q.wait_serial(r'destroyed: "File Explorer', 5)
-    q.drag(*ic(1, 1), *ic(0, 1), steps=8)      # Welcome.txt -> Notepad
+    q.drag(*ic(1, 2), *ic(0, 1), steps=8)      # Welcome.txt -> Notepad
     q.wait_serial(r"open /Desktop/Welcome.txt with Notepad", 5)
     q.wait_serial(r"opened /Desktop/Welcome.txt", 5)
     q.key("alt-f4")
 
     # ---- Settings: 1280x800, keep it
     q.key("meta_l")
-    for _ in range(10): q.key("down")
+    for _ in range(11): q.key("down")
     q.key("ret")
     q.wait_serial(r'created: "Settings"', 5)
     sx, sy = 192, 159                          # centred 640x440 client at 1024x768

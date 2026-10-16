@@ -172,6 +172,24 @@ static void draw_icon(surface_t *s, int id)
         gfx_text_scaled(s, 15, 6, "\x03", 2, RGB(210, 30, 40));
         gfx_char(s, 6, 12, 6, RGB(20, 20, 20), COLOR_NONE);
         break;
+    case ICON_AUDIO:
+        gfx_round_rect(s, 2, 2, 28, 28, 6, RGB(230, 90, 40));
+        gfx_fill_rect(s, 18, 6, 3, 15, 0xFFFFFF);
+        gfx_line(s, 20, 6, 26, 9, 0xFFFFFF); gfx_line(s, 20, 7, 26, 10, 0xFFFFFF);
+        gfx_fill_circle(s, 14, 21, 5, 0xFFFFFF);
+        break;
+    case ICON_SPEAKER:
+    case ICON_MUTED:
+        gfx_fill_rect(s, 5, 12, 6, 8, RGB(220, 224, 232));
+        for (int i = 0; i < 8; i++) gfx_vline(s, 11 + i, 12 - i, 8 + 2 * i, RGB(220, 224, 232));
+        if (id == ICON_SPEAKER) {
+            gfx_line(s, 22, 11, 24, 16, RGB(220, 224, 232)); gfx_line(s, 24, 16, 22, 21, RGB(220, 224, 232));
+            gfx_line(s, 25, 7, 28, 16, RGB(220, 224, 232)); gfx_line(s, 28, 16, 25, 25, RGB(220, 224, 232));
+        } else {
+            gfx_thick_line(s, 21, 11, 29, 21, 1, RGB(240, 80, 70));
+            gfx_thick_line(s, 29, 11, 21, 21, 1, RGB(240, 80, 70));
+        }
+        break;
     case ICON_INFO:
     case ICON_WARNING:
     case ICON_ERROR: {
@@ -236,6 +254,7 @@ int icon_for_file(const char *name, bool is_dir)
         if (!strcasecmp(dot, ".txt") || !strcasecmp(dot, ".cfg") || !strcasecmp(dot, ".log") || !strcasecmp(dot, ".md"))
             return ICON_FILE_TEXT;
         if (!strcasecmp(dot, ".bmp")) return ICON_FILE_IMAGE;
+        if (!strcasecmp(dot, ".wav")) return ICON_AUDIO;
     }
     return ICON_FILE;
 }

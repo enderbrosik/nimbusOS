@@ -8,6 +8,7 @@
  *     <out-dir>/System/Wallpapers/Sunset.bmp
  *     <out-dir>/System/Wallpapers/Aurora.bmp
  *     <out-dir>/Pictures/Sample.bmp             a small picture for Paint
+ *     <out-dir>/Music/Ode to Joy.wav             a short synthesised tune (16-bit PCM)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -156,6 +157,46 @@ static void sample(img_t *im)
         }
 }
 
+/* A short tune: the opening of Beethoven's "Ode to Joy" (public domain),
+ * a soft organ-like tone (fundamental + 2 harmonics) over a bass note. */
+static void save_tune(const char *path)
+{
+    static const char *mel = "EEFGGFEDCCDEEDD-EEFGGFEDCCDEDCC-";
+    static const double hz[7] = { 261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88 };   /* C..B */
+    const int rate = 22050, beat = rate * 30 / 100;    /* 0.3 s per note */
+    int n = (int)strlen(mel), frames = n * beat + rate / 2;
+    int16_t *pcm = calloc(frames, 2);
+    for (int i = 0; i < n; i++) {
+        if (mel[i] == '-') continue;
+        double f = hz[mel[i] - 'C'];
+        double hold = (i + 1 < n && mel[i + 1] == '-') ? 2.0 : 1.0;
+        int len = (int)(beat * hold);
+        for (int k = 0; k < len + rate / 10; k++) {
+            int idx = i * beat + k;
+            if (idx >= frames) break;
+            double t = (double)k / rate;
+            double env = k < 300 ? k / 300.0 : exp(-2.2 * t);
+            if (k > len) env *= 1.0 - (double)(k - len) / (rate / 10);
+            double v = sin(2 * M_PI * f * t) + 0.35 * sin(4 * M_PI * f * t) + 0.15 * sin(6 * M_PI * f * t);
+            double bass = 0.45 * sin(2 * M_PI * (f / 2) * t);
+            double s = pcm[idx] + 6000.0 * env * (v + bass);
+            pcm[idx] = s > 32767 ? 32767 : s < -32768 ? -32768 : (int16_t)s;
+        }
+    }
+    uint8_t h[44] = { 'R', 'I', 'F', 'F' };
+    uint32_t dbytes = frames * 2;
+#define P32(o, v) do { uint32_t _v = (v); memcpy(h + (o), &_v, 4); } while (0)
+#define P16(o, v) do { uint16_t _v = (v); memcpy(h + (o), &_v, 2); } while (0)
+    P32(4, 36 + dbytes); memcpy(h + 8, "WAVEfmt ", 8); P32(16, 16); P16(20, 1); P16(22, 1);
+    P32(24, rate); P32(28, rate * 2); P16(32, 2); P16(34, 16); memcpy(h + 36, "data", 4); P32(40, dbytes);
+    FILE *f = fopen(path, "wb");
+    if (!f) { perror(path); exit(1); }
+    fwrite(h, 1, 44, f);
+    fwrite(pcm, 2, frames, f);
+    fclose(f);
+    free(pcm);
+}
+
 static void mkdirs(const char *base, const char *sub)
 {
     char p[1024];
@@ -171,6 +212,8 @@ int main(int argc, char **argv)
     mkdirs(o, "System");
     mkdirs(o, "System/Wallpapers");
     mkdirs(o, "Pictures");
+    mkdirs(o, "Music");
+    snprintf(p, sizeof p, "%s/Music/Ode to Joy.wav", o); save_tune(p);
     img_t a = img_new(1024, 768), b = img_new(1024, 768), c = img_new(1024, 768), s = img_new(320, 240);
     hills(&a); sunset(&b); aurora(&c); sample(&s);
     snprintf(p, sizeof p, "%s/System/wallpaper.bmp", o); save_bmp(p, &a);

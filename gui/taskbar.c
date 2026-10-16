@@ -16,13 +16,15 @@
 #include "kernel/pmm.h"
 #include "kernel/string.h"
 #include "kernel/settings.h"
+#include "kernel/sound.h"
+#include "kernel/task.h"
 #include "kernel/kprintf.h"
 #include "drivers/pit.h"
 #include "drivers/fb.h"
 
 #define BTN_X0 98
 #define CLOCK_W 92
-#define TRAY_W 52
+#define TRAY_W 76
 #define MAX_BTNS 32
 
 static rect_t bar;
@@ -125,6 +127,7 @@ void taskbar_draw(surface_t *s)
     int tx = SCREEN_W - CLOCK_W - TRAY_W;
     gfx_vline(s, tx - 4, bar.y + 6, bar.h - 12, RGB(70, 78, 98));
     icon_draw_small(s, ICON_DRIVE, tx + 4, bar.y + 10);
+    icon_draw_small(s, sound_muted() ? ICON_MUTED : ICON_SPEAKER, tx + 50, bar.y + 10);
     gfx_fill_rect(s, tx + 26, bar.y + 9, 8, 18, RGB(20, 22, 28));
     int mh = 16 * mem_used_pct / 100;
     gfx_fill_rect(s, tx + 27, bar.y + 10 + 16 - mh, 6, mh, mem_used_pct > 80 ? RGB(240, 80, 60) : RGB(80, 200, 120));
@@ -179,6 +182,14 @@ static void win_menu_cb(int id, void *ctx)
 
 void taskbar_mouse_down(int x, int y, int button)
 {
+    int tx = SCREEN_W - CLOCK_W - TRAY_W;
+    if (rect_contains(rect_make(tx + 46, bar.y, 24, bar.h), x, y)) {    /* speaker: toggle mute */
+        sound_set_muted(!sound_muted());
+        settings_set_int("muted", sound_muted());
+        klog("[ui  ] sound %s\n", sound_muted() ? "muted" : "unmuted");
+        taskbar_changed();
+        return;
+    }
     if (rect_contains(start_btn, x, y)) {
         if (button == MOUSE_LEFT) taskbar_toggle_start();
         return;
@@ -251,6 +262,7 @@ void system_shutdown(void)
 {
     klog("[ui  ] shut down requested\n");
     farewell("NimbusOS is shutting down...");
+    if (sound_available() && settings_get_int("system_sounds", 1)) { sound_event(SND_SHUTDOWN); task_sleep(1100); }
     power_shutdown();
 }
 

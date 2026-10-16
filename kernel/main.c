@@ -19,6 +19,7 @@
 #include "gui/wm.h"
 #include "gui/theme.h"
 #include "kernel/settings.h"
+#include "kernel/sound.h"
 #include "drivers/ps2.h"
 #include "drivers/keyboard.h"
 #include "drivers/mouse.h"
@@ -35,6 +36,7 @@ static void gui_task(void *arg)
 {
     wm_init();
     kprintf("[gui ] Desktop ready\n");
+    sound_event(SND_STARTUP);
     wm_run();
 }
 
@@ -123,6 +125,7 @@ void kmain(struct bootinfo *bi)
 
     /* ---- Stage 5: desktop ---- */
     settings_load();
+    sound_init();
     int rw = 1024, rh = 768;
     const char *res = settings_get("resolution", "1024x768");
     char *x;

@@ -12,6 +12,7 @@
 #include "kernel/random.h"
 #include "kernel/string.h"
 #include "kernel/kprintf.h"
+#include "kernel/sound.h"
 
 #define GW 32
 #define GH 22
@@ -116,6 +117,7 @@ static void step(window_t *w)
     if (hit_wall || hit_self) {
         g->state = OVER;
         klog("[snak] game over, score %d\n", g->score);
+        sound_event(SND_BOOM);
         if (g->score > g->hiscore) { g->hiscore = g->score; save_hiscore(g); }
         return;
     }
@@ -129,6 +131,7 @@ static void step(window_t *w)
         if (g->speed_ms > 60) g->speed_ms -= 4;
         wm_set_timer(w, g->speed_ms);
         klog("[snak] ate food, score %d\n", g->score);
+        sound_event(SND_EAT);
         if (g->len < MAXLEN) place_food(g);
     }
 }

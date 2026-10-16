@@ -15,14 +15,17 @@ usable interactively:
 import os, socket, subprocess, time, tempfile, re
 
 class Qemu:
-    def __init__(self, drives, mem="256M", extra=None, outdir="build/test", name="qemu"):
+    def __init__(self, drives, mem="256M", extra=None, outdir="build/test", name="qemu", audio_wav=None):
         os.makedirs(outdir, exist_ok=True)
         self.outdir = outdir
         self.serial_path = os.path.join(outdir, name + "-serial.log")
         self.mon_path = os.path.join(tempfile.mkdtemp(), "mon.sock")
         args = ["qemu-system-i386", "-m", mem, "-vga", "std", "-display", "none",
                 "-serial", "file:" + self.serial_path,
-                "-monitor", "unix:%s,server,nowait" % self.mon_path, "-no-shutdown"]
+                "-monitor", "unix:%s,server,nowait" % self.mon_path, "-no-shutdown",
+                # AC'97 card; audio is discarded unless a WAV capture file is given
+                "-audiodev", ("wav,id=snd0,path=%s" % audio_wav) if audio_wav else "none,id=snd0",
+                "-device", "AC97,audiodev=snd0"]
         for i, d in enumerate(drives):
             args += ["-drive", "file=%s,format=raw,index=%d,media=disk" % (d, i)]
         args += extra or []

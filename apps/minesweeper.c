@@ -16,6 +16,7 @@
 #include "kernel/random.h"
 #include "kernel/string.h"
 #include "kernel/kprintf.h"
+#include "kernel/sound.h"
 
 #define CELL 22
 #define TOP 72
@@ -122,8 +123,9 @@ static void reveal(struct mines *m, int x, int y)
                 if (m->mine[yy][xx]) m->state[yy][xx] = FLAGGED;
         m->flags = m->nmines;
         klog("[mine] won %s in %d s\n", levels[m->level].name, m->seconds);
+        sound_event(SND_WIN);
     }
-    if (m->status == LOST) klog("[mine] boom at %d,%d\n", m->exploded_x, m->exploded_y);
+    if (m->status == LOST) { klog("[mine] boom at %d,%d\n", m->exploded_x, m->exploded_y); sound_event(SND_BOOM); }
 }
 
 static void chord(struct mines *m, int x, int y)

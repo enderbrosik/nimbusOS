@@ -18,6 +18,7 @@
 #include "kernel/random.h"
 #include "kernel/string.h"
 #include "kernel/kprintf.h"
+#include "kernel/sound.h"
 
 #define CW 71
 #define CH 96
@@ -254,6 +255,7 @@ static void check_win(struct sol *g)
     if (found == 52 && !g->won) {
         g->won = true;
         klog("[sol ] won in %d moves\n", g->s.moves);
+        sound_event(SND_WIN);
     }
 }
 
