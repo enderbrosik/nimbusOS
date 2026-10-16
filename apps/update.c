@@ -1,5 +1,5 @@
 /*
- * NimbusOS - NimbusUpdate: checks the update server, shows what a new
+ * NimbusOS - Nimbus Update: checks the update server, shows what a new
  * release contains, downloads and verifies it, installs it and offers to
  * restart.  The work is done by kernel/update.c.
  */
@@ -29,7 +29,7 @@ static void paint(window_t *w)
     surface_t *s = w->surface;
     gfx_fill_rect(s, 0, 0, s->w, s->h, C_WINDOW_BG);
     icon_draw(s, ICON_UPDATE, 20, 18);
-    gfx_text_scaled(s, 64, 20, "NimbusUpdate", 2, C_TEXT);
+    gfx_text_scaled(s, 64, 20, "Nimbus Update", 2, C_TEXT);
     char b[300];
     snprintf(b, sizeof b, "Installed: NimbusOS %s", NIMBUS_VERSION);
     gfx_ui_text(s, 20, 66, b, C_TEXT);
@@ -126,7 +126,7 @@ void update_open(const char *unused)
     struct upd_app *a = kzalloc(sizeof *a);
     if (!a) return;
     a->u = update_new(on_say, NULL);
-    window_t *w = wm_create("NimbusUpdate", ICON_UPDATE, 560, 420, 0, on_event, a);
+    window_t *w = wm_create("Nimbus Update", ICON_UPDATE, 560, 420, 0, on_event, a);
     if (!w || !a->u) { update_free(a->u); kfree(a); return; }
     upd_win = w;
     update_check(a->u, false);                 /* check right away */

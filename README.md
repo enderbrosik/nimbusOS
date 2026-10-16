@@ -164,7 +164,7 @@ BIOS ──► LBA 0: MBR (arch/x86/boot/mbr.asm, 512 bytes, loaded at 0x7C00)
 | 0 | MBR: boot code, boot-info block at 0x1A0 (`NBT1`, stage 2 + kernel location), disk signature at 0x1B8, partition table |
 | 1 – 63 | stage 2 |
 | 64 – 2079 | kernel slot A (flat binary, up to ~1 MiB) |
-| 2080 – 4095 | kernel slot B (used by NimbusUpdate; the MBR says which slot boots) |
+| 2080 – 4095 | kernel slot B (used by Nimbus Update; the MBR says which slot boots) |
 | 4096 – end | partition 1, type `0x4E`: NimbusFS system volume |
 
 ### Memory layout
@@ -454,9 +454,9 @@ with `-mcmodel=large` (they live above 4 GiB) and no SSE.
 **Writing a program:** put `myprog.c` in `user/programs/` and run `make`. It
 is built, linked with `user/linker.ld` and installed as `/Programs/myprog.elf`.
 
-## NimbusUpdate: signed updates from your own server
+## Nimbus Update: signed updates from your own server
 
-**NimbusUpdate** (Start menu, or `update` in the Terminal) checks a static
+**Nimbus Update** (Start menu, or `update` in the Terminal) checks a static
 HTTPS server for a newer release, shows its notes, downloads it, verifies
 it and installs it: the kernel and the system files under `/Programs` and
 `/System`. Your documents, pictures and settings are never touched.
@@ -472,7 +472,7 @@ it and installs it: the kernel and the system files under `/Programs` and
   only then does a single MBR write switch slots (`kernel/bootarea.c`). If
   anything fails before that, the old kernel still boots.
 
-Kernel updates need an installed system; on the live CD NimbusUpdate refuses.
+Kernel updates need an installed system; on the live CD Nimbus Update refuses.
 
 ### Publishing a release (Vercel)
 

@@ -1,5 +1,5 @@
 /*
- * NimbusOS - NimbusUpdate core: signed updates from a static HTTPS server.
+ * NimbusOS - Nimbus Update core: signed updates from a static HTTPS server.
  *
  * Drive it from the GUI task: create, start a check, then call update_poll()
  * from a timer until the phase is final.  Every message is passed to the
@@ -30,6 +30,6 @@ bool update_needs_restart(struct update *u);              /* a new kernel was in
 void update_progress(struct update *u, u32 *done, u32 *total);   /* bytes */
 
 const char *update_server(void);                          /* from settings, or the built-in default */
-void update_set_server(const char *url);
+bool update_host_allowed(const char *url);
 bool update_signing_configured(void);
 #endif

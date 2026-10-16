@@ -1,5 +1,5 @@
 /*
- * NimbusOS - build a signed update release for NimbusUpdate.
+ * NimbusOS - build a signed update release for Nimbus Update.
  *
  *   mkrelease <out-dir> <version> <kernel.bin> <update.key> <notes.txt> <root>...
  *
@@ -165,7 +165,7 @@ int main(int argc, char **argv)
     f = fopen(path, "w");
     fprintf(f, "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>NimbusOS updates</title></head><body>"
                "<h1>NimbusOS update server</h1><p>Current release: <b>%s</b>. NimbusOS systems download "
-               "<a href=\"manifest.txt\">manifest.txt</a> from here with NimbusUpdate.</p></body></html>\n", version);
+               "<a href=\"manifest.txt\">manifest.txt</a> from here with Nimbus Update.</p></body></html>\n", version);
     fclose(f);
     char pubhex[65];
     hexstr(pubhex, pub, 32);

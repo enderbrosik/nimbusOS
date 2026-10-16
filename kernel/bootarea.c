@@ -1,5 +1,5 @@
 /*
- * NimbusOS - kernel slots in the boot area, for NimbusUpdate.
+ * NimbusOS - kernel slots in the boot area, for Nimbus Update.
  *
  * The boot area (LBA 1..4095, before the NimbusFS partition) holds stage 2
  * and two kernel slots: A at LBA 64 and B at LBA 2080, 2016 sectors each.

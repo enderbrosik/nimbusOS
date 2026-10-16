@@ -1,5 +1,5 @@
 /*
- * NimbusOS - NimbusUpdate core (see kernel/update.h).
+ * NimbusOS - Nimbus Update core (see kernel/update.h).
  *
  * The server is a static folder (tools/mkrelease.c):
  *   manifest.txt   "nimbus-update 1", version, date, notes, kernel and file lines
@@ -74,8 +74,20 @@ static void fail(struct update *u, const char *msg)
     u->phase = UPD_FAILED;
 }
 
-const char *update_server(void) { return settings_get("update_url", NIMBUS_UPDATE_URL); }
-void update_set_server(const char *url) { settings_set("update_url", url); }
+/* Nimbus Update only talks to the official site. The host is fixed at build
+ * time (NIMBUS_UPDATE_HOST, nimbusos.vercel.app; the test suite builds
+ * against a local server), and it cannot be changed from the settings. */
+const char *update_server(void) { return NIMBUS_UPDATE_URL; }
+bool update_host_allowed(const char *url)
+{
+    const char *host = strstr(url, "://");
+    if (!host) return false;
+    host += 3;
+    u32 n = strlen(NIMBUS_UPDATE_HOST);
+    return !strncasecmp(host, NIMBUS_UPDATE_HOST, n) && (host[n] == 0 || host[n] == '/' || host[n] == ':') &&
+           !strncmp(url, "https://", 8);
+}
+void update_set_server(const char *url) { (void)url; }
 
 static int hexval(char c) { return c >= '0' && c <= '9' ? c - '0' : (c | 32) >= 'a' && (c | 32) <= 'f' ? (c | 32) - 'a' + 10 : -1; }
 
@@ -156,7 +168,7 @@ void update_check(struct update *u, bool then_install)
     strlcpy(u->base, update_server(), sizeof u->base);
     u32 l = strlen(u->base);
     while (l && u->base[l - 1] == '/') u->base[--l] = 0;
-    if (strncmp(u->base, "https://", 8) && strncmp(u->base, "http://", 7)) { fail(u, "the update server URL must start with https://"); return; }
+    if (!update_host_allowed(u->base)) { fail(u, "Nimbus Update only uses " NIMBUS_UPDATE_HOST); return; }
     u->phase = UPD_CHECKING;
     say(u, false, "Checking %s ...", u->base);
     fetch(u, "manifest.txt", STEP_MANIFEST);

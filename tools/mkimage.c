@@ -10,7 +10,7 @@
  *   LBA 0          MBR (stage 1) + boot info block + partition table
  *   LBA 1..63      stage 2 (max 31.5 KiB)
  *   LBA 64..2079   kernel slot A (max ~1 MiB, the one booted after mkimage)
- *   LBA 2080..4095 kernel slot B (filled by NimbusUpdate)
+ *   LBA 2080..4095 kernel slot B (filled by Nimbus Update)
  *   LBA 4096..end  NimbusFS partition (type 0x4E), formatted by nfstool
  *
  * This tool only ever creates/overwrites the regular file named on the
@@ -30,7 +30,7 @@
 #define STAGE2_LBA 1
 #define KERNEL_LBA 64
 #define FS_LBA 4096
-/* Two kernel slots for NimbusUpdate (kernel/bootarea.c): A at LBA 64, B at 2080. */
+/* Two kernel slots for Nimbus Update (kernel/bootarea.c): A at LBA 64, B at 2080. */
 #define KERNEL_SLOT_SECTORS 2016
 #define PART_TYPE 0x4E
 

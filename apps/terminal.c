@@ -58,7 +58,7 @@ struct term {
     bool nl_pending;
     struct netjob *job;          /* running network command */
     struct proc *proc;           /* running user program */
-    struct update *upd;          /* NimbusUpdate (the 'update' command) */
+    struct update *upd;          /* Nimbus Update (the 'update' command) */
 };
 
 static window_t *cur_win;
@@ -241,7 +241,7 @@ static void cmd_help(struct term *t, int argc, char **argv)
         "  ping <host> [n]     ICMP echo;  nslookup <name>   DNS lookup",
         "  wget <url> [file]   download over HTTP(S);  http <url>  print a page",
         "  history / exit / shutdown / reboot / uname",
-        "  update [install]    check for / install a NimbusOS update (update url <url>)",
+        "  update [install]    check for / install a NimbusOS update",
         "",
         "Programs: any ELF64 executable runs as a user-mode process, e.g. the",
         "samples in /Programs: hello, primes, guess, mandel, wc, todo, sysinfo,",
@@ -597,8 +597,7 @@ static void cmd_update(window_t *w, int argc, char **argv)
 {
     struct term *t = w->app;
     if (argc >= 2 && !strcmp(argv[1], "url")) {
-        if (argc >= 3) { update_set_server(argv[2]); out(C_FG, "Update server set to %s\n", argv[2]); }
-        else out(C_FG, "Update server: %s\n", update_server());
+        out(C_FG, "Update server: %s (fixed; Nimbus Update only uses this site)\n", update_server());
         return;
     }
     bool install = argc >= 2 && !strcmp(argv[1], "install");

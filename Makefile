@@ -19,7 +19,9 @@ IMG_MB  ?= 64
 # Release version (shown at boot, compared by NimbusUpdate) and the default
 # update server; `make release VERSION=0.3 UPDATE_URL=https://you.vercel.app`.
 VERSION    ?= 0.2
-UPDATE_URL ?= https://nimbusos-update.vercel.app
+UPDATE_URL ?= https://nimbusos.vercel.app
+# The only host NimbusUpdate will contact (the test suite sets a local one).
+UPDATE_HOST ?= nimbusos.vercel.app
 # Update signing keys (public key compiled into the kernel, secret key signs releases).
 UPDATE_PUBKEY ?= keys/update.pub
 UPDATE_KEY    ?= keys/update.key
@@ -102,7 +104,7 @@ build: $(IMG)
 GEN := $(BUILD)/gen
 $(GEN)/nimbus_version.h: FORCE
 	@mkdir -p $(GEN)
-	@printf '#define NIMBUS_VERSION "%s"\n#define NIMBUS_UPDATE_URL "%s"\n' '$(VERSION)' '$(UPDATE_URL)' > $@.tmp
+	@printf '#define NIMBUS_VERSION "%s"\n#define NIMBUS_UPDATE_URL "%s"\n#define NIMBUS_UPDATE_HOST "%s"\n' '$(VERSION)' '$(UPDATE_URL)' '$(UPDATE_HOST)' > $@.tmp
 	@cmp -s $@.tmp $@ && rm -f $@.tmp || mv $@.tmp $@
 $(GEN)/update_pubkey.h: $(wildcard $(UPDATE_PUBKEY))
 	@mkdir -p $(GEN)
@@ -170,7 +172,7 @@ keys: $(BUILD)/tools/nimbuskey
 
 release: $(BUILD)/tools/mkrelease
 	@test -f $(UPDATE_KEY) || (echo "no $(UPDATE_KEY) - run 'make keys' first" && false)
-	$(MAKE) BUILD=$(REL_BUILD) VERSION=$(VERSION) UPDATE_URL=$(UPDATE_URL) UPDATE_PUBKEY=$(UPDATE_PUBKEY) build
+	$(MAKE) BUILD=$(REL_BUILD) VERSION=$(VERSION) UPDATE_URL=$(UPDATE_URL) UPDATE_HOST=$(UPDATE_HOST) UPDATE_PUBKEY=$(UPDATE_PUBKEY) build
 	@mkdir -p $(RELEASE_OUT)
 	find $(RELEASE_OUT) -mindepth 1 -maxdepth 1 ! -name .vercel -exec rm -rf {} +   # keep the Vercel project link
 	$(BUILD)/tools/mkrelease $(RELEASE_OUT) $(VERSION) $(REL_BUILD)/kernel.bin $(UPDATE_KEY) release-notes.txt \
