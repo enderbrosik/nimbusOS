@@ -199,6 +199,16 @@ static void draw_icon(surface_t *s, int id)
         gfx_fill_rect(s, 7, 8, 7, 5, RGB(80, 180, 90));
         gfx_fill_rect(s, 18, 18, 8, 6, RGB(80, 180, 90));
         break;
+    case ICON_BLOCKRUN:                     /* a runner square over spikes */
+        gfx_round_rect(s, 3, 3, 26, 26, 3, RGB(40, 46, 66));
+        gfx_round_rect(s, 7, 6, 12, 12, 3, RGB(90, 230, 170));
+        gfx_fill_rect(s, 9, 9, 2, 2, 0x102030);
+        gfx_fill_rect(s, 14, 9, 2, 2, 0x102030);
+        for (int r = 0; r < 9; r++) {
+            int half = 4 * (9 - r) / 9;
+            gfx_fill_rect(s, 20 - half, 26 - 9 + r, half * 2 + 1, 1, RGB(230, 70, 80));
+        }
+        break;
     case ICON_UPDATE:                       /* green circle with a down arrow (download) */
         gfx_fill_circle(s, 16, 16, 13, RGB(46, 160, 80));
         gfx_circle(s, 16, 16, 13, RGB(24, 110, 50));

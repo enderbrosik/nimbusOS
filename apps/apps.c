@@ -20,6 +20,7 @@ const struct app_def g_apps[APP_COUNT] = {
     [APP_WEB]       = { "Web Browser", ICON_WEB, web_open, true },
     [APP_SETTINGS]  = { "Settings", ICON_SETTINGS, settings_open, true },
     [APP_UPDATE]    = { "Nimbus Update", ICON_UPDATE, update_open, true },
+    [APP_BLOCKRUN]  = { "Block Runner", ICON_BLOCKRUN, blockrun_open, true },
 };
 
 bool system_is_live(void) { return !vfs_exists("/System/installed.txt"); }
