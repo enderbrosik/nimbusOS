@@ -15,6 +15,10 @@ on:
       version:
         description: 'Version, e.g. 0.3'
         required: true
+      notes:
+        description: 'Release notes, one line per change (leave empty to use release-notes.txt)'
+        required: false
+        type: string
 permissions:
   contents: write
 jobs:
@@ -30,6 +34,16 @@ jobs:
           [ -n "$V" ] || V="${GITHUB_REF_NAME#v}"
           echo "VERSION=$V" >> "$GITHUB_ENV"
           echo "UPDATE_URL=${{ vars.UPDATE_URL || 'https://nimbusos.vercel.app' }}" >> "$GITHUB_ENV"
+      - name: Release notes
+        env:
+          NOTES: ${{ github.event.inputs.notes }}
+        run: |
+          if [ -n "$NOTES" ]; then
+            printf '%s\n' "$NOTES" > notes-run.txt
+          else
+            cp release-notes.txt notes-run.txt
+          fi
+          echo "RELEASE_NOTES=notes-run.txt" >> "$GITHUB_ENV"
       - name: Signing key
         env:
           UPDATE_KEY: ${{ secrets.UPDATE_KEY }}
@@ -42,7 +56,7 @@ jobs:
       - name: Host tests
         run: make test
       - name: Signed update files
-        run: make release VERSION="$VERSION" UPDATE_URL="$UPDATE_URL"
+        run: make release VERSION="$VERSION" UPDATE_URL="$UPDATE_URL" RELEASE_NOTES="$RELEASE_NOTES"
       - name: ISO
         run: |
           make BUILD="build/release-$VERSION" VERSION="$VERSION" UPDATE_URL="$UPDATE_URL" iso
@@ -51,13 +65,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          grep -v '^#' release-notes.txt | sed 's/^/- /' > notes.md
+          grep -v '^#' "$RELEASE_NOTES" | sed 's/^/- /' > notes.md
           gh release create "v$VERSION" "nimbusos-$VERSION.iso" --title "NimbusOS $VERSION" --notes-file notes.md \
             || gh release upload "v$VERSION" "nimbusos-$VERSION.iso" --clobber
       - name: Website
         run: |
           ISO_URL="https://github.com/${{ github.repository }}/releases/download/v$VERSION/nimbusos-$VERSION.iso"
-          sh tools/mksite.sh "$VERSION" "$ISO_URL" "$(du -m "nimbusos-$VERSION.iso" | cut -f1)" build/update site-out
+          sh tools/mksite.sh "$VERSION" "$ISO_URL" "$(du -m "nimbusos-$VERSION.iso" | cut -f1)" build/update site-out "$RELEASE_NOTES"
       - name: Publish the site branch
         run: |
           cd site-out

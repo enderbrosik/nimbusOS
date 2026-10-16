@@ -158,6 +158,7 @@ $(BUILD)/tools/tlstest: tools/tlstest.c net/tls.c net/tls.h net/crypto.c net/cry
 #   make release VERSION=0.3 UPDATE_URL=https://<project>.vercel.app
 #   cd build/update && vercel deploy --prod
 RELEASE_OUT ?= build/update
+RELEASE_NOTES ?= release-notes.txt
 REL_BUILD   := build/release-$(VERSION)
 
 $(BUILD)/tools/nimbuskey: tools/nimbuskey.c net/crypto.c net/crypto.h
@@ -176,7 +177,7 @@ release: $(BUILD)/tools/mkrelease
 	$(MAKE) BUILD=$(REL_BUILD) VERSION=$(VERSION) UPDATE_URL=$(UPDATE_URL) UPDATE_HOST=$(UPDATE_HOST) UPDATE_PUBKEY=$(UPDATE_PUBKEY) build
 	@mkdir -p $(RELEASE_OUT)
 	find $(RELEASE_OUT) -mindepth 1 -maxdepth 1 ! -name .vercel -exec rm -rf {} +   # keep the Vercel project link
-	$(BUILD)/tools/mkrelease $(RELEASE_OUT) $(VERSION) $(REL_BUILD)/kernel.bin $(UPDATE_KEY) release-notes.txt \
+	$(BUILD)/tools/mkrelease $(RELEASE_OUT) $(VERSION) $(REL_BUILD)/kernel.bin $(UPDATE_KEY) $(RELEASE_NOTES) \
 	    rootfs $(REL_BUILD)/genroot $(REL_BUILD)/userroot
 
 # Build, sign and publish a release with the Vercel CLI (npm i -g vercel).
