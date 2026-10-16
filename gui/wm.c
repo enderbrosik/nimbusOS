@@ -45,6 +45,13 @@ static int nwin;
 static window_t *focused;
 static int next_id = 1;
 static surface_t screen, *back;
+/* UI scale: the desktop is drawn at 100/ui_pct of the real screen and each
+ * pixel is then copied up (or down) to the framebuffer.  Everything (windows,
+ * taskbar, text) is laid out in these "logical" pixels, so it looks bigger
+ * or smaller without any app changing. */
+static int ui_pct = 100;
+static int phys_w, phys_h;          /* the real screen (framebuffer) size */
+static int *map_x, *map_y;          /* physical pixel -> logical pixel in `back` */
 static rect_t dirty[MAX_DIRTY];
 static int ndirty;
 static int cascade;
@@ -132,11 +139,12 @@ static void cursor_hide(void)
 static void cursor_show(void)
 {
     const struct cursor_def *c = &cursors[cur_cursor];
-    rect_t r = cursor_rect(cur_cursor, mx, my);
+    int px = mx * phys_w / SCREEN_W, py = my * phys_h / SCREEN_H;
+    rect_t r = cursor_rect(cur_cursor, px, py);
     for (int j = 0; j < r.h; j++)            /* save what is underneath */
         memcpy(cursor_save + j * 32, screen.px + (r.y + j) * screen.pitch + r.x, r.w * 4);
     cursor_saved_rect = r;
-    int ox = mx - c->hx, oy = my - c->hy;
+    int ox = px - c->hx, oy = py - c->hy;
     for (int j = 0; j < c->h; j++)
         for (int i = 0; i < c->w; i++) {
             char ch = c->rows[j][i];
@@ -310,13 +318,27 @@ static void compose(rect_t r)
     gfx_reset_clip(back);
 }
 
+/* Copy the logical rectangle lr of `back` to the screen (scaled). */
+static void present(rect_t lr)
+{
+    if (ui_pct == 100) { gfx_blit(&screen, lr.x, lr.y, back, lr.x, lr.y, lr.w, lr.h); return; }
+    int x0 = lr.x * phys_w / SCREEN_W, y0 = lr.y * phys_h / SCREEN_H;
+    int x1 = MIN(((lr.x + lr.w) * phys_w + SCREEN_W - 1) / SCREEN_W, phys_w);
+    int y1 = MIN(((lr.y + lr.h) * phys_h + SCREEN_H - 1) / SCREEN_H, phys_h);
+    for (int y = y0; y < y1; y++) {
+        const u32 *src = back->px + map_y[y] * back->pitch;
+        u32 *dst = screen.px + y * screen.pitch;
+        for (int x = x0; x < x1; x++) dst[x] = src[map_x[x]];
+    }
+}
+
 static void render(void)
 {
     bool cursor_moved = mx != cursor_x || my != cursor_y || cur_cursor != cursor_drawn_shape;
     if (!ndirty && !cursor_moved && cursor_visible) return;
     for (int i = 0; i < ndirty; i++) compose(dirty[i]);
     cursor_hide();
-    for (int i = 0; i < ndirty; i++) gfx_blit(&screen, dirty[i].x, dirty[i].y, back, dirty[i].x, dirty[i].y, dirty[i].w, dirty[i].h);
+    for (int i = 0; i < ndirty; i++) present(dirty[i]);
     ndirty = 0;
     cursor_show();
 }
@@ -938,22 +960,36 @@ void wm_repaint_all(void)
     wm_damage(rect_make(0, 0, SCREEN_W, SCREEN_H));
 }
 
-bool wm_set_resolution(int w, int h)
+/* Size the logical screen for the real screen and the UI scale. */
+static bool make_back(int pct)
 {
-    int ow = SCREEN_W, oh = SCREEN_H;
-    if (w == ow && h == oh) return true;
-    if (!fb_set_mode(w, h)) return false;
-    surface_t *nb = surface_create(w, h);
-    if (!nb) { fb_set_mode(ow, oh); return false; }
+    int lw = (phys_w * 100 + pct - 1) / pct, lh = (phys_h * 100 + pct - 1) / pct;
+    if (lw < 320) lw = 320;
+    if (lh < 180) lh = 180;
+    surface_t *nb = surface_create(lw, lh);
+    if (!nb) return false;
     surface_destroy(back);
     back = nb;
-    SCREEN_W = w;
-    SCREEN_H = h;
+    SCREEN_W = lw;
+    SCREEN_H = lh;
+    ui_pct = pct;
+    kfree(map_x);
+    kfree(map_y);
+    map_x = kmalloc(sizeof(int) * phys_w);
+    map_y = kmalloc(sizeof(int) * phys_h);
+    for (int x = 0; x < phys_w; x++) map_x[x] = MIN((int)((u64)x * lw / phys_w), lw - 1);
+    for (int y = 0; y < phys_h; y++) map_y[y] = MIN((int)((u64)y * lh / phys_h), lh - 1);
+    return true;
+}
+
+/* After the screen or the scale changed: re-fit windows and redraw everything. */
+static void screen_changed(void)
+{
     surface_wrap(&screen, g_fb.pixels, g_fb.width, g_fb.height, g_fb.pitch);
     cursor_visible = false;                 /* the saved pixels are stale */
     menu_close();
     ndirty = 0;
-    mouse_set_bounds(w, h);
+    mouse_set_bounds(SCREEN_W, SCREEN_H);
     int x, y;
     u8 b;
     mouse_get(&x, &y, &b);
@@ -962,12 +998,12 @@ bool wm_set_resolution(int w, int h)
     for (int i = 0; i < nwin; i++) {
         window_t *win = zorder[i];
         if (win->destroyed) continue;
-        if (win->maximized) { wm_set_frame(win, rect_make(0, 0, w, h - TASKBAR_H)); continue; }
+        if (win->maximized) { wm_set_frame(win, rect_make(0, 0, SCREEN_W, SCREEN_H - TASKBAR_H)); continue; }
         rect_t f = win->frame;
-        if (f.w > w) f.w = w;
-        if (f.h > h - TASKBAR_H) f.h = h - TASKBAR_H;
-        if (f.x + f.w > w) f.x = w - f.w;
-        if (f.y + f.h > h - TASKBAR_H) f.y = h - TASKBAR_H - f.h;
+        if (f.w > SCREEN_W) f.w = SCREEN_W;
+        if (f.h > SCREEN_H - TASKBAR_H) f.h = SCREEN_H - TASKBAR_H;
+        if (f.x + f.w > SCREEN_W) f.x = SCREEN_W - f.w;
+        if (f.y + f.h > SCREEN_H - TASKBAR_H) f.y = SCREEN_H - TASKBAR_H - f.h;
         if (f.x < 0) f.x = 0;
         if (f.y < 0) f.y = 0;
         wm_set_frame(win, f);
@@ -976,16 +1012,41 @@ bool wm_set_resolution(int w, int h)
     taskbar_init();
     desktop_screen_changed();
     ndirty = 0;
-    wm_damage(rect_make(0, 0, w, h));
-    klog("[wm  ] resolution changed to %dx%d\n", w, h);
+    wm_damage(rect_make(0, 0, SCREEN_W, SCREEN_H));
+}
+
+bool wm_set_resolution(int w, int h)
+{
+    if (w == phys_w && h == phys_h) return true;
+    int ow = phys_w, oh = phys_h, opct = ui_pct;
+    if (!fb_set_mode(w, h)) return false;
+    phys_w = w;
+    phys_h = h;
+    if (!make_back(ui_pct)) { phys_w = ow; phys_h = oh; fb_set_mode(ow, oh); return false; }
+    screen_changed();
+    klog("[wm  ] resolution changed to %dx%d (UI scale %d%%)\n", w, h, opct);
     return true;
 }
+
+void wm_set_ui_scale(int pct)
+{
+    if (pct < 50) pct = 50;
+    if (pct > 200) pct = 200;
+    if (pct == ui_pct) return;
+    if (!make_back(pct)) return;
+    screen_changed();
+    klog("[wm  ] UI scale %d%%\n", pct);
+}
+
+int wm_ui_scale(void) { return ui_pct; }
 
 void wm_init(void)
 {
     surface_wrap(&screen, g_fb.pixels, g_fb.width, g_fb.height, g_fb.pitch);
-    back = surface_create(SCREEN_W, SCREEN_H);
-    if (!back) panic("wm: cannot allocate back buffer");
+    phys_w = g_fb.width;
+    phys_h = g_fb.height;
+    int pct = settings_get_int("ui_scale", 100);
+    if (!make_back(pct < 50 || pct > 200 ? 100 : pct)) panic("wm: cannot allocate back buffer");
     mouse_set_bounds(SCREEN_W, SCREEN_H);
     int x, y;
     u8 b;

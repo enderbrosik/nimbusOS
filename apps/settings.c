@@ -48,6 +48,8 @@ static const u32 accents[8] = {
     RGB(0, 120, 215), RGB(16, 124, 16), RGB(194, 57, 52), RGB(135, 100, 184),
     RGB(202, 80, 16), RGB(0, 153, 188), RGB(232, 17, 123), RGB(76, 74, 72),
 };
+static const int ui_scales[6] = { 75, 100, 125, 150, 175, 200 };
+static const char *scale_names[6] = { "75%", "100%", "125%", "150%", "175%", "200%" };
 static const int speeds[5] = { 2, 3, 4, 6, 8 };
 static const char *speed_names[5] = { "Slow", "Slower", "Normal", "Faster", "Fast" };
 static const int dbl_times[3] = { 300, 450, 650 };
@@ -100,7 +102,7 @@ static void paint(window_t *w)
         int last = MIN(a->mode_scroll + MODE_ROWS, (int)ARRAY_SIZE(modes));
         for (int i = a->mode_scroll; i < last; i++) {
             bool ok = fb_mode_supported(modes[i].w, modes[i].h);
-            bool current = modes[i].w == SCREEN_W && modes[i].h == SCREEN_H;
+            bool current = modes[i].w == (int)g_fb.width && modes[i].h == (int)g_fb.height;
             char tag[48];
             if (modes[i].name[0]) snprintf(tag, sizeof tag, "%s, %s", modes[i].name, modes[i].ratio);
             else snprintf(tag, sizeof tag, "%s", modes[i].ratio);
@@ -134,6 +136,12 @@ static void paint(window_t *w)
         heading(s, rect_make(c.x, c.y + 186, c.w, 0), "Background");
         a->wall_btn = rect_make(c.x, c.y + 220, 180, 28);
         ui_button(s, a->wall_btn, "Change Wallpaper...", BTN_NORMAL);
+        heading(s, rect_make(c.x, c.y + 270, c.w, 0), "UI scale");
+        for (int i = 0; i < (int)ARRAY_SIZE(ui_scales); i++) {
+            rect_t r = rect_make(c.x + i * 80, c.y + 298, 72, 28);
+            ui_button(s, r, scale_names[i], ui_scales[i] == wm_ui_scale() ? BTN_DEFAULT : BTN_NORMAL);
+        }
+        gfx_ui_text(s, c.x, c.y + 336, "Makes windows, text and icons bigger or smaller.", C_TEXT_DIM);
         break;
     }
     case PG_MOUSE: {
@@ -233,7 +241,7 @@ static void confirm_close(struct settings_app *a, bool keep)
     if (wm_window_alive(cw)) wm_destroy_window(cw);
     if (keep) {
         char b[24];
-        snprintf(b, sizeof b, "%dx%d", SCREEN_W, SCREEN_H);
+        snprintf(b, sizeof b, "%ux%u", g_fb.width, g_fb.height);
         settings_set("resolution", b);
         klog("[sett] kept resolution %s\n", b);
     } else {
@@ -290,9 +298,9 @@ static void apply_mode(window_t *w)
     struct settings_app *a = w->app;
     if (a->sel_mode < 0) return;
     int nw = modes[a->sel_mode].w, nh = modes[a->sel_mode].h;
-    if (nw == SCREEN_W && nh == SCREEN_H) return;
-    a->old_w = SCREEN_W;
-    a->old_h = SCREEN_H;
+    if (nw == (int)g_fb.width && nh == (int)g_fb.height) return;
+    a->old_w = g_fb.width;
+    a->old_h = g_fb.height;
     if (!wm_set_resolution(nw, nh)) {
         klog("[sett] mode %dx%d failed\n", nw, nh);
         return;
@@ -345,6 +353,13 @@ static void on_event(window_t *w, event_t *e)
             break;
         }
         case PG_APPEARANCE:
+            for (int i = 0; i < (int)ARRAY_SIZE(ui_scales); i++)
+                if (rect_contains(rect_make(c.x + i * 80, c.y + 298, 72, 28), e->x, e->y)) {
+                    wm_set_ui_scale(ui_scales[i]);
+                    settings_set_int("ui_scale", ui_scales[i]);
+                    paint(w);
+                    return;
+                }
             for (int i = 0; i < 8; i++)
                 if (rect_contains(rect_make(c.x + i * 44, c.y + 36, 36, 36), e->x, e->y)) {
                     theme_set_accent(accents[i]);
@@ -429,7 +444,7 @@ void settings_open(const char *page)
     if (!a) return;
     a->sel_mode = -1;
     for (unsigned i = 0; i < ARRAY_SIZE(modes); i++)
-        if (modes[i].w == SCREEN_W && modes[i].h == SCREEN_H) a->sel_mode = i;
+        if (modes[i].w == (int)g_fb.width && modes[i].h == (int)g_fb.height) a->sel_mode = i;
     for (int i = 0; page && i < NPAGES; i++) if (!strcasecmp(page, page_names[i])) a->page = i;
     set_win = wm_create("Settings", ICON_SETTINGS, 640, 440, WF_NO_MAXIMIZE, on_event, a);
     if (!set_win) { kfree(a); return; }

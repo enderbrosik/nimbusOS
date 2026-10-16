@@ -98,6 +98,8 @@ int       wm_mouse_y(void);
 enum { CURSOR_ARROW, CURSOR_TEXT, CURSOR_RESIZE_H, CURSOR_RESIZE_V, CURSOR_RESIZE_NWSE, CURSOR_RESIZE_NESW, CURSOR_CROSS };
 void      wm_set_app_cursor(int cursor);          /* cursor while hovering a client */
 bool      wm_set_resolution(int w, int h);        /* live mode switch */
+void      wm_set_ui_scale(int pct);             /* 50..200, saved by Settings */
+int       wm_ui_scale(void);
 
 /* Drag-and-drop of a file/folder path.  An app calls wm_begin_dnd while it
  * has the mouse captured; on release the window under the cursor gets
