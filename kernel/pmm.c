@@ -47,6 +47,14 @@ void pmm_init(void)
     for (u32 f = 0; f < kend; f++)
         if (!is_used(f)) { set_used(f); free_frames--; }
     search_hint = kend;
+    /* Live CD: the RAM disk loaded by stage 2 must never be handed out. */
+    if (g_bootinfo.ramdisk_addr) {
+        u32 first = g_bootinfo.ramdisk_addr / PAGE_SIZE;
+        u32 last = (g_bootinfo.ramdisk_addr + g_bootinfo.ramdisk_sectors * 512 + PAGE_SIZE - 1) / PAGE_SIZE;
+        for (u32 f = first; f < last; f++)
+            if (!is_used(f)) { set_used(f); free_frames--; }
+        kprintf("[pmm ] reserved RAM disk %p, %u KiB\n", (void *)g_bootinfo.ramdisk_addr, g_bootinfo.ramdisk_sectors / 2);
+    }
     kprintf("[pmm ] %u MiB usable, %u frames free, kernel ends at %p\n",
             total_frames / 256, free_frames, __kernel_end);
 }

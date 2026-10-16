@@ -3,8 +3,11 @@
 import sys, os, subprocess
 sys.path.insert(0, os.path.dirname(__file__))
 from qemu_harness import Qemu
+import shutil
+os.makedirs("build/test", exist_ok=True)
+shutil.copy("build/nimbus.img", "build/test/stage2.img")   # never boot the pristine image
 
-with Qemu(["build/nimbus.img"], name="stage2") as q:
+with Qemu(["build/test/stage2.img"], name="stage2") as q:
     q.wait_serial(r"Core kernel OK", timeout=30)
     log = q.serial()
     for needle in ["paging enabled", "[test] pmm", "[test] vmm", "[test] heap", "scheduler: preemptive"]:

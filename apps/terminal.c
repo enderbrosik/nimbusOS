@@ -397,7 +397,7 @@ static void cmd_df(struct term *t, int argc, char **argv)
 {
     u32 total, freeb;
     nbfs_statfs(ROOTFS, &total, &freeb);
-    out(C_FG, "Volume \"%s\" on %s\n", ROOTFS->sb.label, g_ata[g_root->drive].name);
+    out(C_FG, "Volume \"%s\" on %s\n", ROOTFS->sb.label, boot_disk_name());
     out(C_FG, "  size %u KiB, used %u KiB, free %u KiB (%u%%), inodes free %u/%u\n", total / 1024,
         (total - freeb) / 1024, freeb / 1024, (u32)((u64)freeb * 100 / MAX(1u, total)), ROOTFS->sb.free_inodes, ROOTFS->sb.inode_count);
 }

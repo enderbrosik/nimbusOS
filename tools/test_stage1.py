@@ -6,8 +6,11 @@ desktop takes over)."""
 import sys, os
 sys.path.insert(0, os.path.dirname(__file__))
 from qemu_harness import Qemu
+import shutil
+os.makedirs("build/test", exist_ok=True)
+shutil.copy("build/nimbus.img", "build/test/stage1.img")   # never boot the pristine image
 
-with Qemu(["build/nimbus.img"], name="stage1") as q:
+with Qemu(["build/test/stage1.img"], name="stage1") as q:
     q.wait_serial(r"breakpoint exception handled", timeout=20)
     q.screenshot("build/test/stage1.png")
     log = q.serial()

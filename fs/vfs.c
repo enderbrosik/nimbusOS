@@ -13,6 +13,7 @@
 #include "kernel/heap.h"
 #include "kernel/kprintf.h"
 #include "kernel/string.h"
+#include "kernel/vmm.h"
 
 struct volume *g_root;
 
@@ -98,8 +99,70 @@ void volume_unmount(struct volume *v)
     kfree(v);
 }
 
+/* ---- live CD RAM disk (whole disk image loaded by stage 2) ---- */
+static u8 *ramdisk;
+static u32 ramdisk_sectors;
+
+bool vfs_booted_from_ramdisk(void) { return ramdisk != NULL; }
+
+static int ram_read(void *ctx, u32 lba, u32 count, void *buf)
+{
+    struct part_ctx *p = ctx;
+    if (lba + count > p->sectors) return -1;
+    memcpy(buf, ramdisk + (u64)(p->lba + lba) * 512, count * 512);
+    return 0;
+}
+
+static int ram_write(void *ctx, u32 lba, u32 count, const void *buf)
+{
+    struct part_ctx *p = ctx;
+    if (lba + count > p->sectors) return -1;
+    memcpy(ramdisk + (u64)(p->lba + lba) * 512, buf, count * 512);
+    return 0;
+}
+
+int boot_disk_read(u32 lba, u32 count, void *buf)
+{
+    if (ramdisk) {
+        if (lba + count > ramdisk_sectors) return -1;
+        memcpy(buf, ramdisk + (u64)lba * 512, count * 512);
+        return 0;
+    }
+    return ata_read(g_root->drive, lba, count, buf);
+}
+
+const char *boot_disk_name(void)
+{
+    return ramdisk ? "Live CD (RAM disk)" : g_ata[g_root->drive].name;
+}
+
+static bool mount_ramdisk(void)
+{
+    ramdisk = (u8 *)g_bootinfo.ramdisk_addr;
+    ramdisk_sectors = g_bootinfo.ramdisk_sectors;
+    vmm_identity_map(g_bootinfo.ramdisk_addr, ramdisk_sectors * 512);
+    u8 *pe = ramdisk + 0x1BE;
+    if (ramdisk[510] != 0x55 || ramdisk[511] != 0xAA || pe[4] != NBFS_PART_TYPE) return false;
+    struct volume *v = kzalloc(sizeof *v);
+    v->drive = -1;
+    v->part_lba = *(u32 *)(pe + 8);
+    v->part_sectors = *(u32 *)(pe + 12);
+    struct part_ctx *p = kmalloc(sizeof *p);
+    p->drive = -1; p->lba = v->part_lba; p->sectors = v->part_sectors;
+    v->dev = (struct nbfs_blkdev){ p, ram_read, ram_write, v->part_sectors };
+    v->fs.now = fs_now;
+    if (nbfs_mount(&v->fs, &v->dev)) { kfree(p); kfree(v); return false; }
+    g_root = v;
+    u32 total, freeb;
+    nbfs_statfs(ROOTFS, &total, &freeb);
+    kprintf("[vfs ] live CD: mounted \"%s\" from RAM disk at %p: %u KiB, %u KiB free (changes are not saved)\n",
+            ROOTFS->sb.label, ramdisk, total / 1024, freeb / 1024);
+    return true;
+}
+
 bool vfs_init(void)
 {
+    if (g_bootinfo.ramdisk_addr && g_bootinfo.ramdisk_sectors) return mount_ramdisk();
     int d = boot_drive_index();
     if (d < 0) {
         kprintf("[vfs ] boot disk not found by signature, trying drive 0\n");

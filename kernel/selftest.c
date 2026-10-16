@@ -128,7 +128,9 @@ void selftest_fs(void)
     ASSERT(vfs_read_all("/readme.txt", &txt, &len) == 0 && len > 10);
     kfree(txt);
 
-    /* create / write / read / rename / delete on the real disk */
+    /* create / write / read / rename / delete on the real disk
+     * (first remove leftovers of a run that was interrupted by power-off) */
+    if (vfs_exists("/selftest")) nbfs_remove_tree(fs, "/selftest");
     u32 free_before = fs->sb.free_blocks;
     ASSERT(nbfs_mkdir(fs, "/selftest") == 0);
     ASSERT(nbfs_mkdir(fs, "/selftest/nested") == 0);

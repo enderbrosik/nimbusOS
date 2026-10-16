@@ -48,7 +48,8 @@ static void paint(window_t *w)
     nbfs_statfs(ROOTFS, &total, &freeb);
     snprintf(b, sizeof b, "NimbusFS \"%s\", %u of %u MiB free", ROOTFS->sb.label, freeb >> 20, total >> 20);
     line(s, y, "System volume", b); y += 22;
-    snprintf(b, sizeof b, "%s (%s)", g_ata[g_root->drive].name, g_ata[g_root->drive].model);
+    if (vfs_booted_from_ramdisk()) snprintf(b, sizeof b, "%s", boot_disk_name());
+    else snprintf(b, sizeof b, "%s (%s)", g_ata[g_root->drive].name, g_ata[g_root->drive].model);
     line(s, y, "Boot disk", b); y += 22;
     u32 up = (u32)(timer_ticks() / 1000);
     snprintf(b, sizeof b, "%u h %02u m %02u s", up / 3600, (up / 60) % 60, up % 60);

@@ -22,6 +22,14 @@
 ;   +20 u32 kernel LBA
 ;   +24 u32 kernel sector count
 ;   +28 u32 disk signature of the boot disk
+;   +32 u32 RAM disk address (0 if none)
+;   +36 u32 RAM disk size in sectors
+;
+; Live CD: when the MBR's boot info block carries the 'RAMD' flag (set by
+; tools/mkimage for the image embedded in the ISO), the BIOS is booting us
+; through El Torito hard-disk emulation.  A CD is read-only and the kernel
+; has no ATAPI driver, so stage 2 copies the WHOLE emulated disk to 16 MiB
+; and the kernel runs from that RAM disk.
 ; =============================================================================
 
 [bits 16]
@@ -35,6 +43,8 @@ BOUNCE_SEG   equ 0x2000          ; 0x20000 linear
 CHUNK        equ 64              ; sectors per BIOS read (32 KiB)
 KERNEL_ADDR  equ 0x100000
 MBR          equ 0x7C00
+RAMDISK_ADDR equ 0x1000000         ; 16 MiB
+RAMD_FLAG    equ 0x444D4152        ; 'RAMD'
 
 stage2:
     cli
@@ -50,9 +60,33 @@ stage2:
     mov si, msg_hello
     call print
 
+    ; Disk access method: LBA extensions if present, else CHS (see mbr.asm)
+    mov ah, 0x08
+    mov dl, [drive]
+    xor di, di
+    int 0x13
+    jc .no_geom
+    and cx, 0x3F
+    mov [spt], cx
+    movzx dx, dh
+    inc dx
+    mov [heads], dx
+.no_geom:
+    xor ax, ax
+    mov es, ax
+    mov ah, 0x41
+    mov bx, 0x55AA
+    mov dl, [drive]
+    int 0x13
+    jc .chs_mode
+    cmp bx, 0xAA55
+    jne .chs_mode
+    mov byte [use_ext], 1
+.chs_mode:
+
     ; ---- clear boot info -------------------------------------------------
     mov di, BOOTINFO
-    mov cx, 16
+    mov cx, 20
     xor eax, eax
     rep stosw
     mov dword [BOOTINFO+0], 0x494F424E      ; 'NBOI'
@@ -142,15 +176,49 @@ stage2:
     test eax, eax
     jz kernel_missing
 
-.load_loop:
+    call load_sectors
+    mov si, msg_ok
+    call print
+
+    ; ---- 4b. Live CD: whole disk image -> RAM disk at 16 MiB ---------------
+    cmp dword [MBR+0x1B4], RAMD_FLAG
+    jne .no_ramdisk
+    mov si, msg_ramdisk
+    call print
+    mov eax, [MBR+0x1BE+8]          ; partition start + size = disk size
+    add eax, [MBR+0x1BE+12]
+    mov [remaining], eax
+    mov [BOOTINFO+36], eax
+    mov dword [BOOTINFO+32], RAMDISK_ADDR
+    mov dword [cur_lba], 0
+    mov dword [dest], RAMDISK_ADDR
+    call load_sectors
+    mov si, msg_ok
+    call print
+.no_ramdisk:
+
+    ; ---- 5. Protected mode -----------------------------------------------
+    cli
+    lgdt [gdt_desc]
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+    jmp dword 0x08:pm_entry
+
+; Load [remaining] sectors starting at LBA [cur_lba] to linear address
+; [dest], CHUNK sectors at a time through the bounce buffer.
+load_sectors:
+.loop:
     mov eax, [remaining]
     test eax, eax
-    jz .load_done
+    jz .done
     cmp eax, CHUNK
     jbe .chunk_ok
     mov eax, CHUNK
 .chunk_ok:
     mov [chunk], ax
+    cmp byte [use_ext], 0
+    je .chs
     mov [dap_count], ax
     mov word [dap_off], 0
     mov word [dap_seg], BOUNCE_SEG
@@ -161,6 +229,39 @@ stage2:
     mov dl, [drive]
     int 0x13
     jc disk_error
+    jmp .copy
+.chs:
+    ; CHS read: never cross a track, so read at most to the end of it
+    mov eax, [cur_lba]
+    xor edx, edx
+    movzx ecx, word [spt]
+    div ecx                     ; eax = lba / spt, edx = lba % spt
+    mov bx, [spt]
+    sub bx, dx                  ; sectors left on this track
+    cmp bx, [chunk]
+    jae .fits
+    mov [chunk], bx
+.fits:
+    inc dx
+    mov cl, dl                  ; sector (1-based)
+    xor edx, edx
+    movzx esi, word [heads]
+    div esi                     ; eax = cylinder, edx = head
+    mov dh, dl
+    mov ch, al
+    shl ah, 6
+    or cl, ah
+    mov dl, [drive]
+    push es
+    mov ax, BOUNCE_SEG
+    mov es, ax
+    xor bx, bx
+    mov al, [chunk]
+    mov ah, 0x02
+    int 0x13
+    pop es
+    jc disk_error
+.copy:
 
     ; Copy the bounce buffer above 1 MiB.  The BIOS may have reloaded
     ; segment registers, so (re-)enter unreal mode before every copy.
@@ -176,20 +277,13 @@ stage2:
     sub [remaining], eax
     shl eax, 9
     add [dest], eax
+    test word [cur_lba], 0x3FF  ; a progress dot every 512 KiB
+    jnz .loop
     mov al, '.'
     call putc
-    jmp .load_loop
-.load_done:
-    mov si, msg_ok
-    call print
-
-    ; ---- 5. Protected mode -----------------------------------------------
-    cli
-    lgdt [gdt_desc]
-    mov eax, cr0
-    or eax, 1
-    mov cr0, eax
-    jmp dword 0x08:pm_entry
+    jmp .loop
+.done:
+    ret
 
 ; Enter "unreal mode": briefly switch to protected mode, load DS/ES with a
 ; flat 4 GiB descriptor, then return to real mode.  The segment descriptor
@@ -262,6 +356,9 @@ pm_entry:
 ; Data
 ; ---------------------------------------------------------------------------
 drive:      db 0
+use_ext:    db 0
+spt:        dw 63
+heads:      dw 255
 chunk:      dw 0
 cur_lba:    dd 0
 remaining:  dd 0
@@ -289,5 +386,6 @@ gdt_desc:
 msg_hello:    db "NimbusOS stage2", 13, 10, 0
 msg_loading:  db "Loading kernel", 0
 msg_ok:       db " ok", 13, 10, 0
+msg_ramdisk:  db "Live CD: loading disk image into RAM", 0
 msg_nokernel: db "No kernel!", 0
 msg_diskerr:  db "Disk read error", 0

@@ -8,7 +8,7 @@
 /* A mounted NimbusFS volume on an ATA drive partition. */
 struct volume {
     nbfs_t fs;
-    int drive;
+    int drive;                     /* ATA drive, or -1 for the live-CD RAM disk */
     u32 part_lba, part_sectors;
     struct nbfs_blkdev dev;
 };
@@ -22,6 +22,11 @@ struct volume *volume_mount(int drive);
 void volume_unmount(struct volume *v);
 void blkdev_for_partition(struct nbfs_blkdev *dev, int drive, u32 lba, u32 sectors);
 bool vfs_init(void);
+
+/* The disk the system booted from: an ATA drive or the live-CD RAM disk. */
+bool vfs_booted_from_ramdisk(void);
+int  boot_disk_read(u32 lba, u32 count, void *buf);
+const char *boot_disk_name(void);
 
 /* convenience wrappers on the root volume */
 int  vfs_read_all(const char *path, char **out, u32 *len);   /* kmalloc'ed, NUL terminated */

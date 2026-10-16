@@ -1,7 +1,10 @@
 /*
  * NimbusOS - host tool: assemble a bootable raw disk image (.img file).
  *
- *   mkimage <out.img> <size-MiB> <mbr.bin> <stage2.bin> <kernel.bin>
+ *   mkimage <out.img> <size-MiB> <mbr.bin> <stage2.bin> <kernel.bin> [--ramdisk]
+ *
+ * --ramdisk sets the 'RAMD' flag in the boot info block: stage 2 then loads
+ * the whole disk into RAM (used for the image embedded in the live-CD ISO).
  *
  * Disk layout (512-byte sectors):
  *   LBA 0          MBR (stage 1) + boot info block + partition table
@@ -16,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <time.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -46,8 +50,9 @@ static void put16(uint8_t *p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
 
 int main(int argc, char **argv)
 {
-    if (argc != 6) {
-        fprintf(stderr, "usage: %s out.img size-MiB mbr.bin stage2.bin kernel.bin\n", argv[0]);
+    bool ramdisk = argc == 7 && !strcmp(argv[6], "--ramdisk");
+    if (argc != 6 && !ramdisk) {
+        fprintf(stderr, "usage: %s out.img size-MiB mbr.bin stage2.bin kernel.bin [--ramdisk]\n", argv[0]);
         return 1;
     }
     const char *out = argv[1];
@@ -75,6 +80,7 @@ int main(int argc, char **argv)
     put16(mbr + 0x1A8, s2_sec);
     put32(mbr + 0x1AC, KERNEL_LBA);
     put32(mbr + 0x1B0, k_sec);
+    put32(mbr + 0x1B4, ramdisk ? 0x444D4152 : 0);   /* 'RAMD' */
     put32(mbr + 0x1B8, (uint32_t)time(NULL) ^ ((uint32_t)getpid() << 16) ^ 0x4E494D42);
 
     /* Partition entry 0: bootable, LBA addressed, type 0x4E (NimbusFS).

@@ -327,7 +327,7 @@ static void install_tick(window_t *w)
             s->lba = 1;           /* LBA 0 (MBR) is written last */
         }
         u32 n = MIN((u32)CHUNK, BOOT_AREA - s->lba);
-        if (ata_read(s->boot_drive, s->lba, n, buf) || ata_write(t, s->lba, n, buf)) { fail(w, "disk I/O error at LBA %u", s->lba); return; }
+        if (boot_disk_read(s->lba, n, buf) || ata_write(t, s->lba, n, buf)) { fail(w, "disk I/O error at LBA %u", s->lba); return; }
         s->lba += n;
         if (s->lba >= BOOT_AREA) {
             logline(s, "Copied stage 2 + kernel (%u KiB)", (BOOT_AREA - 1) / 2);
@@ -372,7 +372,7 @@ static void install_tick(window_t *w)
         struct rtc_time tm;
         rtc_read(&tm);
         int n = snprintf(note, sizeof note, "NimbusOS installed %04d-%02d-%02d %02d:%02d from the live disk on %s.\n",
-                         tm.year, tm.month, tm.day, tm.hour, tm.minute, g_ata[s->boot_drive].name);
+                         tm.year, tm.month, tm.day, tm.hour, tm.minute, boot_disk_name());
         nbfs_mkdir(s->tfs, "/System");
         int r = nbfs_write_file(s->tfs, "/System/installed.txt", note, n);
         if (r < 0) { fail(w, "writing settings: %s", nbfs_strerror(r)); return; }
@@ -390,7 +390,8 @@ static void install_tick(window_t *w)
     }
     case S_MBR: {
         static u8 mbr[512];
-        if (ata_read(s->boot_drive, 0, 1, mbr)) { fail(w, "cannot read the live MBR"); return; }
+        if (boot_disk_read(0, 1, mbr)) { fail(w, "cannot read the live MBR"); return; }
+        *(u32 *)(mbr + 0x1B4) = 0;           /* installed disks boot normally, not as a RAM disk */
         u32 sig = rnd_signature();
         *(u32 *)(mbr + 0x1B8) = sig;
         memset(mbr + 0x1BE, 0, 64);
@@ -533,5 +534,5 @@ void installer_open(const char *unused)
     inst_win = wm_create("NimbusOS Setup", ICON_INSTALLER, W, H, WF_NO_MAXIMIZE, on_event, s);
     if (!inst_win) { kfree(s); return; }
     wm_center(inst_win);
-    klog("[inst] setup started (live disk: %s)\n", g_ata[s->boot_drive].name);
+    klog("[inst] setup started (live disk: %s)\n", boot_disk_name());
 }

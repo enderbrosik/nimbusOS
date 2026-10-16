@@ -21,6 +21,8 @@ struct bootinfo {
     u32 kernel_lba;
     u32 kernel_sectors;
     u32 disk_signature;
+    u32 ramdisk_addr;       /* live CD: whole disk image in RAM, else 0 */
+    u32 ramdisk_sectors;
 } PACKED;
 
 extern struct bootinfo g_bootinfo;

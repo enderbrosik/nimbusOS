@@ -30,6 +30,8 @@ make test-all     # host suite + every QEMU stage test (headless)
 | `make build` | Assembles the bootloader, compiles the kernel, builds the host tools, creates `build/nimbus.img` and populates its NimbusFS partition from `rootfs/` plus generated wallpapers |
 | `make run` | `qemu-system-i386 -m 256M -vga std` on the image, COM1 on stdio |
 | `make debug` | Same, but QEMU starts paused with a GDB stub on `:1234` (prints the `gdb` command to use; symbols come from `build/kernel.elf`) |
+| `make iso` | Builds the bootable live CD `build/nimbus.iso` |
+| `make run-iso` | Boots the ISO in QEMU as a CD-ROM |
 | `make clean` | Removes `build/` |
 | `make test` | Builds and runs `tools/fstest` (NimbusFS test suite, on a scratch image file) |
 | `make fsimage` | Uses the formatter to create an empty standalone file system image `build/empty-fs.img` |
@@ -44,6 +46,29 @@ Add QEMU options with `QEMU_EXTRA`, e.g. `make run QEMU_EXTRA="-display sdl"`.
 > open block/character devices, and nothing uses `dd`, `fdisk`, `mkfs` or
 > `diskutil`. The installer only runs inside QEMU against the attached image
 > files, and only after an explicit confirmation (see Stage 7).
+
+## Live CD (`make iso`)
+
+`build/nimbus.iso` is an ISO 9660 image with an El Torito boot entry using
+**hard-disk emulation**, written by `tools/mkiso.c` (no external ISO tools
+are needed). The BIOS presents the embedded 32 MiB copy of the disk image as
+drive 0x80, so the normal MBR and stage 2 boot from it.
+
+* That copy carries a `RAMD` flag, so stage 2 loads the *whole* image into RAM
+  at 16 MiB. The kernel then mounts its file system from that RAM disk, which
+  is needed because a CD is read-only and there is no ATAPI driver.
+* It is a true live system: everything works, but changes are lost at power-off.
+* Run the installer from the live CD to put NimbusOS on a hard disk; the
+  installed disk boots normally from ATA.
+* Both boot loaders fall back to CHS reads (INT 13h AH=02h, geometry from
+  AH=08h) when the BIOS has no LBA extensions, which is typical for emulated
+  disks.
+
+```sh
+make iso && make run-iso
+# VirtualBox / VMware: create a 32-bit "Other" VM with a 64+ MiB IDE disk,
+# attach nimbus.iso as the CD, use the standard VGA adapter.
+```
 
 ## Installing the toolchain
 

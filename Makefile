@@ -51,7 +51,7 @@ MKIMAGE := $(BUILD)/tools/mkimage
 QEMU_COMMON := -m 256M -vga std -drive file=$(IMG),format=raw,index=0,media=disk
 QEMU_EXTRA  ?=
 
-.PHONY: all build run debug clean test fsimage installer-test run-target test-all
+.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso
 all: build
 build: $(IMG)
 
@@ -111,6 +111,31 @@ $(IMG): $(MBR) $(STAGE2) $(KBIN) $(KELF) $(MKIMAGE) $(NFSTOOL) $(GENROOT)/.stamp
 	$(NFSTOOL) import $@ rootfs /
 	$(NFSTOOL) import $@ $(GENROOT) /
 
+# ---- live CD --------------------------------------------------------------
+# The ISO embeds a 32 MiB copy of the disk image flagged --ramdisk: the
+# BIOS boots it via El Torito hard-disk emulation and stage 2 copies it into
+# RAM, so the CD works as a live system (changes are lost at power off).
+ISO      := $(BUILD)/nimbus.iso
+CDIMG    := $(BUILD)/nimbus-cd.img
+MKISO    := $(BUILD)/tools/mkiso
+
+$(MKISO): tools/mkiso.c
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) $< -o $@
+
+$(CDIMG): $(MBR) $(STAGE2) $(KBIN) $(MKIMAGE) $(NFSTOOL) $(GENROOT)/.stamp $(ROOTFS_FILES)
+	$(MKIMAGE) $@ 32 $(MBR) $(STAGE2) $(KBIN) --ramdisk
+	$(NFSTOOL) format $@ NIMBUS
+	$(NFSTOOL) import $@ rootfs /
+	$(NFSTOOL) import $@ $(GENROOT) /
+
+iso: $(ISO)
+$(ISO): $(CDIMG) $(MKISO)
+	$(MKISO) $@ $(CDIMG)
+
+run-iso: $(ISO)
+	$(QEMU) -m 256M -vga std -cdrom $(ISO) -boot d -serial stdio $(QEMU_EXTRA)
+
 run: $(IMG)
 	$(QEMU) $(QEMU_COMMON) -serial stdio $(QEMU_EXTRA)
 
@@ -147,6 +172,7 @@ test-all: test $(IMG)
 	python3 tools/test_stage5.py
 	python3 tools/test_stage6.py
 	python3 tools/test_stage7.py
+	python3 tools/test_iso.py
 
 clean:
 	rm -rf $(BUILD)
