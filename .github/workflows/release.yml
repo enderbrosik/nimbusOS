@@ -1,0 +1,68 @@
+# Build, sign and publish a NimbusOS release.
+#
+# Run it by pushing a tag (git tag v0.3 && git push origin v0.3) or from the
+# Actions tab ("Run workflow", enter a version).  It needs:
+#   * secret   UPDATE_KEY  = the contents of keys/update.key (Settings > Secrets and variables > Actions)
+#   * variable UPDATE_URL  = your Vercel site, e.g. https://nimbusos.vercel.app (optional)
+# It attaches the ISO to a GitHub Release and force-pushes the website and the
+# signed update files to the `site` branch, which Vercel serves.
+name: Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version, e.g. 0.3'
+        required: true
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: sudo apt-get update && sudo apt-get install -y nasm lld clang
+      - name: Version
+        run: |
+          V="${{ github.event.inputs.version }}"
+          [ -n "$V" ] || V="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+          echo "UPDATE_URL=${{ vars.UPDATE_URL || 'https://nimbusos.vercel.app' }}" >> "$GITHUB_ENV"
+      - name: Signing key
+        env:
+          UPDATE_KEY: ${{ secrets.UPDATE_KEY }}
+        run: |
+          if [ -z "$UPDATE_KEY" ]; then
+            echo "::error::Add the UPDATE_KEY secret (the contents of keys/update.key)"; exit 1
+          fi
+          printf '%s\n' "$UPDATE_KEY" > keys/update.key
+          chmod 600 keys/update.key
+      - name: Host tests
+        run: make test
+      - name: Signed update files
+        run: make release VERSION="$VERSION" UPDATE_URL="$UPDATE_URL"
+      - name: ISO
+        run: |
+          make BUILD="build/release-$VERSION" VERSION="$VERSION" UPDATE_URL="$UPDATE_URL" iso
+          cp "build/release-$VERSION/nimbus.iso" "nimbusos-$VERSION.iso"
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          grep -v '^#' release-notes.txt | sed 's/^/- /' > notes.md
+          gh release create "v$VERSION" "nimbusos-$VERSION.iso" --title "NimbusOS $VERSION" --notes-file notes.md \
+            || gh release upload "v$VERSION" "nimbusos-$VERSION.iso" --clobber
+      - name: Website
+        run: |
+          ISO_URL="https://github.com/${{ github.repository }}/releases/download/v$VERSION/nimbusos-$VERSION.iso"
+          sh tools/mksite.sh "$VERSION" "$ISO_URL" "$(du -m "nimbusos-$VERSION.iso" | cut -f1)" build/update site-out
+      - name: Publish the site branch
+        run: |
+          cd site-out
+          git init -q
+          git checkout -q -b site
+          git add -A
+          git -c user.name="NimbusOS release" -c user.email="actions@github.com" commit -q -m "NimbusOS $VERSION"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" site

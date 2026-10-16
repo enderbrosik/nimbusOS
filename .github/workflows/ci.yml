@@ -1,0 +1,17 @@
+# Build NimbusOS and run the host-side tests (file system, crypto) on every push.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: sudo apt-get update && sudo apt-get install -y nasm lld clang
+      - name: Build
+        run: make build
+      - name: Host tests
+        run: make test

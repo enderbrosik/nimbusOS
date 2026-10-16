@@ -93,7 +93,7 @@ QEMU_SND := -audiodev $(AUDIO),id=snd0 -device AC97,audiodev=snd0 -nic user,mode
 QEMU_COMMON := -m 256M -vga std $(QEMU_SND) -drive file=$(IMG),format=raw,index=0,media=disk
 QEMU_EXTRA  ?=
 
-.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso programs release keys FORCE
+.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso programs release keys deploy FORCE
 all: build
 build: $(IMG)
 
@@ -171,9 +171,18 @@ keys: $(BUILD)/tools/nimbuskey
 release: $(BUILD)/tools/mkrelease
 	@test -f $(UPDATE_KEY) || (echo "no $(UPDATE_KEY) - run 'make keys' first" && false)
 	$(MAKE) BUILD=$(REL_BUILD) VERSION=$(VERSION) UPDATE_URL=$(UPDATE_URL) UPDATE_PUBKEY=$(UPDATE_PUBKEY) build
-	rm -rf $(RELEASE_OUT)
+	@mkdir -p $(RELEASE_OUT)
+	find $(RELEASE_OUT) -mindepth 1 -maxdepth 1 ! -name .vercel -exec rm -rf {} +   # keep the Vercel project link
 	$(BUILD)/tools/mkrelease $(RELEASE_OUT) $(VERSION) $(REL_BUILD)/kernel.bin $(UPDATE_KEY) release-notes.txt \
 	    rootfs $(REL_BUILD)/genroot $(REL_BUILD)/userroot
+
+# Build, sign and publish a release with the Vercel CLI (npm i -g vercel).
+# The first run asks you to log in and to create/link a project; the link is
+# kept in build/update/.vercel so later deploys go to the same project.
+deploy: release
+	@command -v vercel >/dev/null || (echo "Vercel CLI not found - install it with: npm i -g vercel" && false)
+	cd $(RELEASE_OUT) && vercel deploy --prod
+	@echo "Done. On NimbusOS, point the updater at your project's URL once: update url https://<project>.vercel.app"
 
 test: $(BUILD)/tools/fstest $(BUILD)/tools/cryptotest
 	@mkdir -p $(BUILD)/test

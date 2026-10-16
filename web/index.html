@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NimbusOS</title>
+<meta name="description" content="NimbusOS: a hobby operating system for x86-64 written from scratch, with a Windows-style desktop.">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #f4f7fb; --fg: #1d2330; --muted: #5b6475; --card: #ffffff; --line: #dde3ec;
+    --accent: #2b7de0; --accent-fg: #ffffff; --code: #eef2f8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11151c; --fg: #e6eaf0; --muted: #9aa4b5; --card: #1a202a; --line: #2a3240;
+            --accent: #4b97f0; --accent-fg: #ffffff; --code: #222a36; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 48px 16px 64px; }
+  header { display: flex; align-items: center; gap: 20px; margin-bottom: 28px; }
+  header img { width: 88px; height: 88px; }
+  h1 { margin: 0; font-size: 40px; line-height: 1.1; }
+  .tag { color: var(--muted); margin: 6px 0 0; font-size: 18px; }
+  .download { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 24px;
+              display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; }
+  .btn { display: inline-block; background: var(--accent); color: var(--accent-fg); text-decoration: none;
+         padding: 12px 22px; border-radius: 10px; font-weight: 600; font-size: 17px; }
+  .btn:hover { filter: brightness(1.08); }
+  .meta { color: var(--muted); font-size: 14px; }
+  h2 { margin: 40px 0 12px; font-size: 24px; }
+  ul { padding-left: 22px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .card h3 { margin: 0 0 6px; font-size: 17px; }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  pre { background: var(--code); border-radius: 10px; padding: 14px 16px; overflow-x: auto; font-size: 14px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  footer { margin-top: 48px; color: var(--muted); font-size: 14px; }
+  header > div, .download > div { min-width: 0; overflow-wrap: anywhere; }
+  .grid { grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); }
+  @media (max-width: 520px) {
+    header { gap: 14px; }
+    header img { width: 64px; height: 64px; }
+    h1 { font-size: 32px; }
+    .tag { font-size: 16px; }
+    .btn { width: 100%; text-align: center; }
+  }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.svg" alt="">
+    <div>
+      <h1>NimbusOS</h1>
+      <p class="tag">A hobby operating system for x86-64, written from scratch, with a Windows-style desktop.</p>
+    </div>
+  </header>
+
+  <section class="download">
+    <div>
+      <strong>NimbusOS {{VERSION}}</strong><br>
+      <span class="meta">Live CD image (ISO), {{ISO_MB}} MB, released {{DATE}}</span>
+    </div>
+    <a class="btn" href="{{ISO_URL}}">Download NimbusOS {{VERSION}}</a>
+  </section>
+
+  <h2>What's new</h2>
+  <ul>{{NOTES}}</ul>
+
+  <h2>Run it</h2>
+  <p>NimbusOS runs in <a href="https://www.qemu.org/">QEMU</a> (on a Mac: <code>brew install qemu</code>).
+     Boot the live CD with a blank 60 MB disk to install onto:</p>
+<pre><code>truncate -s 60M disk.img
+qemu-system-x86_64 -m 256M -vga std \
+  -audiodev coreaudio,id=snd0 -device AC97,audiodev=snd0 \
+  -nic user,model=e1000 \
+  -cdrom nimbusos-{{VERSION}}.iso -boot d \
+  -drive file=disk.img,format=raw,index=0</code></pre>
+  <p class="meta">On Linux use <code>-audiodev pa,id=snd0</code> (or <code>none</code>). Inside NimbusOS, open
+     <b>Install NimbusOS</b> to put it on the disk; afterwards boot with <code>-boot c</code>.</p>
+
+  <h2>What's inside</h2>
+  <div class="grid">
+    <div class="card"><h3>Desktop</h3><p>Draggable windows, taskbar, Start menu, File Explorer, Notepad, Paint, Terminal, Settings.</p></div>
+    <div class="card"><h3>Games &amp; media</h3><p>Minesweeper, Snake, Solitaire, and a Media Player with AC'97 sound.</p></div>
+    <div class="card"><h3>Internet</h3><p>Its own TCP/IP stack and a TLS 1.3 client, so the Web Browser opens http:// and https:// pages.</p></div>
+    <div class="card"><h3>Programs</h3><p>Ring-3 user programs with their own C library, system calls and ELF loader.</p></div>
+    <div class="card"><h3>NimbusUpdate</h3><p>Signed updates from this site, with two kernel slots so an update can't break booting.</p></div>
+    <div class="card"><h3>From scratch</h3><p>Bootloader, 64-bit kernel, drivers, file system and GUI: no existing kernel, libc or GUI library.</p></div>
+  </div>
+
+  <h2>Updates</h2>
+  <p>Installed systems check this site with NimbusUpdate (Start menu, or <code>update</code> in the Terminal).
+     Every release is signed with Ed25519, so NimbusOS only installs updates from its publisher.</p>
+
+  <footer>NimbusOS {{VERSION}} &middot; update manifest: <a href="manifest.txt">manifest.txt</a></footer>
+</main>
+</body>
+</html>
