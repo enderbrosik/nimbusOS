@@ -22,6 +22,7 @@
 #include "gui/wm.h"
 #include "gui/theme.h"
 #include "gui/menu.h"
+#include "gui/cliphist.h"
 #include "gui/icons.h"
 #include "gui/desktop.h"
 #include "gui/taskbar.h"
@@ -533,6 +534,15 @@ void wm_close(window_t *w)
     else wm_destroy_window(w);
 }
 
+void wm_post_key(window_t *w, struct key_event *ke)
+{
+    event_t e;
+    memset(&e, 0, sizeof e);
+    e.type = EV_KEY;
+    e.key = *ke;
+    send(w, &e);
+}
+
 void wm_set_modal(window_t *owner, window_t *dialog)
 {
     if (!owner || !dialog) return;
@@ -962,6 +972,10 @@ static void handle_key(struct key_event *ke)
     if (ke->pressed && (ke->key == KEY_LWIN || ke->key == KEY_RWIN)) { taskbar_toggle_start(); return; }
     if (ke->pressed && (ke->mods & MOD_CTRL) && ke->key == KEY_ESC) { taskbar_toggle_start(); return; }
     if (menu_is_open()) { menu_key(ke); return; }
+    if (ke->pressed && (ke->mods & MOD_CTRL) && (ke->mods & MOD_SHIFT) && ke->key == 'c') {
+        cliphist_open(focused);
+        return;
+    }
     if (drag_mode == DRAG_DND && ke->pressed && ke->key == KEY_ESC) {
         wm_damage(last_dnd);
         drag_mode = DRAG_NONE;

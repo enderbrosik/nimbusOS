@@ -2,6 +2,7 @@
 #include "gui/widgets.h"
 #include "gui/theme.h"
 #include "gui/icons.h"
+#include "gui/clipboard.h"
 #include "kernel/string.h"
 #include "drivers/pit.h"
 
@@ -194,6 +195,26 @@ bool tf_key(textfield_t *tf, struct key_event *ke)
         return true;
     }
     if ((ke->mods & MOD_CTRL) && ke->key == 'a') { tf->sel = 0; tf->cursor = tf->len; return true; }
+    if ((ke->mods & MOD_CTRL) && ke->key == 'c') {
+        if (tf->sel != tf->cursor)
+            clipboard_set(tf->text + MIN(tf->sel, tf->cursor), MAX(tf->sel, tf->cursor) - MIN(tf->sel, tf->cursor));
+        return true;
+    }
+    if ((ke->mods & MOD_CTRL) && ke->key == 'v') {
+        /* text only: the first line of the clipboard, control characters dropped */
+        u32 len;
+        const char *c = clipboard_get(&len);
+        tf_delete_sel(tf);
+        for (u32 i = 0; c && i < len && c[i] != '\n' && c[i] != '\r'; i++) {
+            if (c[i] < 32 || c[i] >= 127) continue;
+            if (tf->len >= (int)sizeof tf->text - 1) break;
+            memmove(tf->text + tf->cursor + 1, tf->text + tf->cursor, tf->len - tf->cursor + 1);
+            tf->text[tf->cursor++] = c[i];
+            tf->len++;
+        }
+        tf->sel = tf->cursor;
+        return true;
+    }
     if (ke->ch >= 32 && ke->ch < 127 && !(ke->mods & MOD_CTRL)) {
         tf_delete_sel(tf);
         if (tf->len >= (int)sizeof tf->text - 1) return true;
