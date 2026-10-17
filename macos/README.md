@@ -66,14 +66,13 @@ Mounting, as tested on macOS 27 (M4):
 
 ## Icons
 
-`macos/icon/NimbusFS.icns` / `NimbusFS-icon.png` are the NimbusOS logo (cloud, N and sun on hills)
+`macos/icon/NimbusFS.icns` / `NimbusFS-icon.png` are the NimbusOS logo (cloud, N and sun on hills). Use the PNG for the
+app's own icon (drag it into AppIcon in Assets.xcassets).
 
+Tried and **not working** on macOS 27 / FSKit, so do not retrace these:
 
-**Mounted disk icon (experimental).** Put the icon into the image, and add `NimbusVolumeIcon.swift` to the extension
-target (it serves the Finder "custom icon" flag on the root folder):
-
-    nfstool put ~/nimbus-test.img macos/icon/NimbusFS.icns /.VolumeIcon.icns
-
-**Icon for the image file.** Declare a document type in the app target (Info tab > Document Types: name `NimbusFS Disk Image`,
-role Viewer, UTI `com.aaron.garsia.nimbusfs.image`; Exported Type Identifiers: same UTI, conforms to `public.disk-image`,
-extension `nimg`), and give it the `NimbusFS.icns` file as the icon. Then name images `*.nimg`.
+- Custom icon for the mounted disk (`/.VolumeIcon.icns` plus a virtual `com.apple.FinderInfo` attribute on the root):
+  FSKit never served the attribute, Finder kept the generic drive icon.
+- Own file type / icon for `*.nimg` images (exported UTI conforming to `public.disk-image` or `public.data`):
+  LaunchServices lists the type as registered, yet `UTType(filenameExtension: "nimg")` stayed `dyn.`.
+  Keep using plain `.img` images; double-click mounting works for those.
