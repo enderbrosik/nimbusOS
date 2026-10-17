@@ -18,6 +18,7 @@
 #include "drivers/pit.h"
 #include "kernel/task.h"
 #include "kernel/heap.h"
+#include "kernel/version.h"
 #include "kernel/random.h"
 #include "kernel/string.h"
 #include "kernel/kprintf.h"
@@ -940,9 +941,10 @@ int http_get(const char *url_in, char **body, u32 *blen, int *status, char *fina
         struct conn c;
         r = conn_open(&c, ip, port, use_tls, host);
         if (r) return r;
-        char req[768];
+        char req[1024];
         int n = snprintf(req, sizeof req,
-            "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: NimbusOS/0.2\r\nAccept: text/html, text/plain, */*\r\n"
+            "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (compatible; NimbusOS/" NIMBUS_VERSION "; text browser)\r\n"
+            "Accept: text/html, text/plain, */*\r\nAccept-Language: en-US,en;q=0.8\r\n"
             "Accept-Encoding: identity\r\nConnection: close\r\n\r\n", path, host);
         if (conn_send(&c, req, n) < 0) { conn_close(&c); return NET_ERESET; }
         u32 cap = 16384, len = 0;

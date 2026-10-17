@@ -17,6 +17,7 @@
 #include "net/net.h"
 #include "net/netjob.h"
 #include "kernel/heap.h"
+#include "kernel/settings.h"
 #include "kernel/string.h"
 #include "kernel/kprintf.h"
 
@@ -26,6 +27,8 @@
 #define LINE_H 18
 #define MAXLINKS 256
 #define HISTORY 16
+/* Words typed in the address bar are searched with this (setting "search_url"). */
+#define SEARCH_URL "https://html.duckduckgo.com/html/?q="
 
 enum { ST_NORMAL = 0, ST_BOLD = 1, ST_HEADING = 2, ST_PRE = 4, ST_UNDERLINE = 8, ST_COLOR = 16 };
 enum { IT_WORD, IT_BREAK, IT_PARA };
@@ -512,6 +515,30 @@ static void collect_css(struct web *b, const char *h)
 }
 
 /* ---------------------------------------------------------------- parsing */
+/* Decodes the entities in an attribute value in place: &amp; &lt; &gt; &quot; &apos; &#39; &#x27; */
+static void unescape_attr(char *s)
+{
+    char *o = s;
+    while (*s) {
+        if (*s == '&') {
+            if (!strncmp(s, "&amp;", 5)) { *o++ = '&'; s += 5; continue; }
+            if (!strncmp(s, "&lt;", 4)) { *o++ = '<'; s += 4; continue; }
+            if (!strncmp(s, "&gt;", 4)) { *o++ = '>'; s += 4; continue; }
+            if (!strncmp(s, "&quot;", 6)) { *o++ = '"'; s += 6; continue; }
+            if (!strncmp(s, "&apos;", 6)) { *o++ = '\''; s += 6; continue; }
+            if (s[1] == '#') {
+                const char *d = s + 2;
+                int base = 10, v = 0, n = 0;
+                if (*d == 'x' || *d == 'X') { base = 16; d++; }
+                while (n < 6 && hex_digit(*d) >= 0 && (base == 16 || isdigit((u8)*d))) { v = v * base + hex_digit(*d); d++; n++; }
+                if (n && *d == ';' && v >= 32 && v < 127) { *o++ = (char)v; s = (char *)d + 1; continue; }
+            }
+        }
+        *o++ = *s++;
+    }
+    *o = 0;
+}
+
 /* Attributes of a tag (between q and e): href, class, id and style are kept. */
 static void tag_attrs(const char *q, const char *e, char *href, char *cls, char *idv, char *inl)
 {
@@ -539,6 +566,7 @@ static void tag_attrs(const char *q, const char *e, char *href, char *cls, char 
             int n = vl < cap - 1 ? vl : cap - 1;
             memcpy(dst, val, n);
             dst[n] = 0;
+            if (dst == href) unescape_attr(dst);
         }
     }
 }
@@ -553,6 +581,7 @@ static void element_style(struct web *b, struct cstyle *c, const char *tag, cons
     else if (!strcmp(tag, "pre")) c->pre = 1;
     else if (!strcmp(tag, "u") || !strcmp(tag, "ins")) c->underline = 1;
     else if (!strcmp(tag, "center")) c->align = 1;
+    else if (!strcmp(tag, "a")) c->colored = 0;      /* links keep their own colour unless a rule sets one */
     for (int spec = 1; spec <= 3; spec++)
         for (int i = 0; i < b->nrules; i++) {
             struct css_rule *r = &b->rules[i];
@@ -804,8 +833,10 @@ static const char *home_page =
     "<h1>Welcome to the NimbusOS Web Browser</h1>"
     "<p>This is a simple text-mode browser for <b>http://</b> and <b>https://</b> pages. Secure pages "
     "are encrypted with TLS 1.3, but NimbusOS does not check the site's certificate, so it cannot prove "
-    "who it is talking to. Type an address above and press Enter.</p>"
+    "who it is talking to. Type an address above and press Enter, or type words to search the web "
+    "with DuckDuckGo.</p>"
     "<h2>Try</h2><ul>"
+    "<li><a href=\"https://html.duckduckgo.com/html/?q=nimbusos\">Search the web</a> (or just type words in the address bar)</li>"
     "<li><a href=\"http://10.0.2.2:8080/\">http://10.0.2.2:8080/</a> - a web server on your host computer "
     "(e.g. run <b>python3 -m http.server 8080</b>; QEMU's user network maps 10.0.2.2 to the host)</li>"
     "<li><a href=\"http://info.cern.ch/\">http://info.cern.ch/</a> - the first website (1991)</li>"
@@ -823,12 +854,107 @@ static void show_html(window_t *w, const char *html, bool plain)
     paint(w);
 }
 
+/* Percent-encodes search words for a query string: spaces become '+'. */
+static void url_encode(const char *in, char *out, int max)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    int o = 0;
+    for (; *in && o < max - 4; in++) {
+        u8 c = (u8)*in;
+        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') out[o++] = (char)c;
+        else if (c == ' ') out[o++] = '+';
+        else { out[o++] = '%'; out[o++] = hex[c >> 4]; out[o++] = hex[c & 15]; }
+    }
+    out[o] = 0;
+}
+
+/* Text typed in the address bar: an address has no spaces and a dot, colon or slash
+ * ("example.com", "10.0.2.2:8080/x"); anything else is a search. */
+static bool looks_like_address(const char *s)
+{
+    bool mark = false;
+    for (; *s; s++) {
+        if (*s == ' ') return false;
+        if (*s == '.' || *s == ':' || *s == '/') mark = true;
+    }
+    return mark;
+}
+
+/* Percent-decodes up to the next '&' (a query parameter's value). '+' stays '+'. */
+static void pct_decode(const char *in, char *out, int max)
+{
+    int o = 0;
+    for (; *in && *in != '&' && o < max - 1; in++) {
+        if (*in == '%' && hex_digit(in[1]) >= 0 && hex_digit(in[2]) >= 0) { out[o++] = (char)(hex_digit(in[1]) * 16 + hex_digit(in[2])); in += 2; }
+        else out[o++] = *in;
+    }
+    out[o] = 0;
+}
+
+/* DuckDuckGo wraps each result link in /l/?uddg=<encoded target>: go straight to the target. */
+static void unwrap_redirect(char *url, int max)
+{
+    if (!strstr(url, "duckduckgo.com/l/")) return;
+    const char *p = strstr(url, "uddg=");
+    if (!p) return;
+    char target[512];
+    pct_decode(p + 5, target, sizeof target);
+    if (!strncmp(target, "http://", 7) || !strncmp(target, "https://", 8)) strlcpy(url, target, max);
+}
+
+/* Removes "." and ".." segments from the path of an absolute URL (the query is kept). */
+static void normalize_path(char *url, int max)
+{
+    char *p = strstr(url, "://");
+    if (!p) return;
+    char *path = strchr(p + 3, '/');
+    if (!path) return;
+    char tail[256];
+    tail[0] = 0;
+    char *q = strchr(path, '?');
+    if (q) { strlcpy(tail, q, sizeof tail); *q = 0; }
+    char out[256];
+    out[0] = 0;
+    bool slash = false;
+    for (const char *s = path; *s == '/';) {
+        s++;
+        const char *e = s;
+        while (*e && *e != '/') e++;
+        int n = e - s;
+        slash = false;
+        if (n == 0 || (n == 1 && s[0] == '.')) slash = true;
+        else if (n == 2 && s[0] == '.' && s[1] == '.') {
+            char *last = strrchr(out, '/');
+            if (last) *last = 0;
+            slash = true;
+        } else if ((int)strlen(out) + n + 2 < (int)sizeof out) {
+            int ol = strlen(out);
+            out[ol++] = '/';
+            memcpy(out + ol, s, n);
+            out[ol + n] = 0;
+        }
+        s = e;
+    }
+    if (!out[0]) strcpy(out, "/");
+    else if (slash) strlcat(out, "/", sizeof out);
+    int room = max - (int)(path - url);
+    strlcpy(path, out, room);
+    strlcat(url, tail, max);
+}
+
 static void navigate(window_t *w, const char *url, bool push)
 {
     struct web *b = w->app;
     char u[256];
     strlcpy(u, url, sizeof u);
-    if (strncmp(u, "http://", 7) && strncmp(u, "about:", 6) && strncmp(u, "https://", 8)) snprintf(u, sizeof u, "http://%s", url);
+    if (strncmp(u, "http://", 7) && strncmp(u, "about:", 6) && strncmp(u, "https://", 8)) {
+        if (looks_like_address(url)) snprintf(u, sizeof u, "http://%s", url);
+        else {                                      /* search words */
+            char q[200];
+            url_encode(url, q, sizeof q);
+            snprintf(u, sizeof u, "%s%s", settings_get("search_url", SEARCH_URL), q);
+        }
+    }
     if (push && b->url[0] && strcmp(b->url, u)) {
         if (b->nhist == HISTORY) { memmove(b->history[0], b->history[1], (HISTORY - 1) * 256); b->nhist--; }
         strlcpy(b->history[b->nhist++], b->url, 256);
@@ -850,19 +976,34 @@ static void navigate(window_t *w, const char *url, bool push)
     paint(w);
 }
 
-static void resolve_link(struct web *b, const char *href, char *out, int max)
+static void resolve_raw(struct web *b, const char *href, char *out, int max)
 {
     if (!strncmp(href, "http://", 7) || !strncmp(href, "https://", 8) || !strncmp(href, "about:", 6)) { strlcpy(out, href, max); return; }
+    if (href[0] == '#') { strlcpy(out, b->url, max); return; }          /* same page */
     bool secure = !strncmp(b->url, "https://", 8);
     if (!strncmp(href, "//", 2)) { snprintf(out, max, "%s:%s", secure ? "https" : "http", href); return; }
-    /* base = scheme://host[:port] and the directory of the current path */
+    /* base = scheme://host[:port] and the directory of the current path (without its query) */
     char base[256];
     strlcpy(base, b->url, sizeof base);
+    char *qm = strchr(base, '?');
+    if (qm) *qm = 0;
+    if (href[0] == '?') { snprintf(out, max, "%s%s", base, href); return; }
     char *host_end = strchr(base + (secure ? 8 : 7), '/');
     if (href[0] == '/') { if (host_end) *host_end = 0; snprintf(out, max, "%s%s", base, href); return; }
     if (!host_end) strlcat(base, "/", sizeof base);
     else { char *last = strrchr(base, '/'); last[1] = 0; }
     snprintf(out, max, "%s%s", base, href);
+}
+
+/* The absolute URL of a link: relative paths, ?query, //host and ../ resolved, #fragments
+ * dropped, and search-engine redirect wrappers removed. */
+static void resolve_link(struct web *b, const char *href, char *out, int max)
+{
+    resolve_raw(b, href, out, max);
+    char *frag = strchr(out, '#');
+    if (frag) *frag = 0;
+    normalize_path(out, max);
+    unwrap_redirect(out, max);
 }
 
 static int link_at(struct web *b, int x, int y)

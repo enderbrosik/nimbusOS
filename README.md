@@ -545,8 +545,14 @@ DHCP, DNS, TCP (client, with retransmission) and HTTP/1.0. Terminal commands:
 
 The **Web Browser** (Start menu) is a text-mode HTML viewer: it renders
 headings, paragraphs, lists, `<pre>` and links (click to follow, Back,
-address bar). It opens `http://` and `https://` pages; Unicode text is
-shown as its closest ASCII spelling (the UI font is ASCII).
+address bar). It opens `http://` and `https://` pages and understands core
+CSS (`<style>` blocks and `style=""`: colours, bold, sizes, alignment,
+underline, `display: none`; tag, class and id selectors). Words typed in
+the address bar (text with spaces, or without a dot, colon or slash) search
+the web through DuckDuckGo's HTML page; the engine can be changed with the
+`search_url` setting in `/System/settings.cfg` (the typed words are appended
+to it). Result links that DuckDuckGo wraps in `/l/?uddg=` go straight to the
+target. Unicode text is shown as its closest ASCII spelling.
 
 **HTTPS:** a TLS 1.3 client written from scratch (`net/tls.c`), with its
 own cryptography (`net/crypto.c`): SHA-256, HMAC, HKDF, X25519 key
