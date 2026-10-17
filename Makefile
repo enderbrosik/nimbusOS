@@ -306,6 +306,7 @@ test-all: test $(IMG)
 	python3 tools/test_net.py
 	python3 tools/test_user.py
 	python3 tools/test_https.py
+	python3 tools/test_css.py
 	python3 tools/test_update.py
 
 clean:

@@ -19,5 +19,6 @@ struct ui_face {
     const u8 *pix;          /* 8-bit coverage, row-major */
 };
 
-extern const struct ui_face ui_face_regular, ui_face_bold;
+/* 14 px regular and bold for text, 20 px for headings. */
+extern const struct ui_face ui_face_regular, ui_face_bold, ui_face_large, ui_face_large_bold;
 #endif

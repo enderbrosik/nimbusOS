@@ -1,0 +1,26 @@
+<html>
+<head>
+<title>CSS test page</title>
+<style>
+  /* headings and text */
+  body { color: #222222; }
+  h1 { color: #b02020; text-align: center; }
+  h2 { color: rgb(20, 100, 40); }
+  .note { color: blue; font-weight: bold; }
+  #main { text-decoration: underline; }
+  p.right { text-align: right; }
+  .hidden { display: none; }
+  @media print { body { color: white; } }
+</style>
+</head>
+<body>
+<h1>CSS works</h1>
+<h2>Coloured heading</h2>
+<p class="note">This paragraph is blue and bold.</p>
+<p id="main">This paragraph is underlined by its id.</p>
+<p class="right">Right aligned text.</p>
+<p class="hidden">You should not see this.</p>
+<p style="color: #c000c0; font-weight: bold">Inline style: magenta and bold.</p>
+<p>Plain text with <b>bold</b>, <u>underline</u> and <span style="color: green">green</span>.</p>
+</body>
+</html>

@@ -27,11 +27,15 @@
 #define MAXLINKS 256
 #define HISTORY 16
 
-enum { ST_NORMAL = 0, ST_BOLD = 1, ST_HEADING = 2, ST_PRE = 4 };
+enum { ST_NORMAL = 0, ST_BOLD = 1, ST_HEADING = 2, ST_PRE = 4, ST_UNDERLINE = 8, ST_COLOR = 16 };
 enum { IT_WORD, IT_BREAK, IT_PARA };
 
-struct item { u8 type, style; i16 link; u32 off, len; };
-struct run { int x, line; u32 off, len; u8 style; i16 link; };
+/* the computed style of an element (inherited by its children) */
+struct cstyle { u8 bold, large, pre, underline, align, hidden, colored; u32 color; };
+struct css_rule { char sel[48]; u8 spec; u32 off, len; };     /* declarations are in web.css */
+
+struct item { u8 type, style, align, glue; i16 link; u32 off, len, color; };
+struct run { int x, line, w; u32 off, len, color; u8 style, align; i16 link; };
 
 struct web {
     textfield_t addr;
@@ -42,6 +46,8 @@ struct web {
     char *text; u32 tlen, tcap;
     struct item *items; int nitems, icap;
     char *links[MAXLINKS]; int nlinks;
+    struct css_rule *rules; int nrules, rrcap;
+    char *css; u32 csslen, csscap;          /* the declarations of the rules */
     /* layout */
     struct run *runs; int nruns, rcap, nlines, laid_w;
     int scroll;                 /* in lines */
@@ -58,14 +64,22 @@ static void doc_clear(struct web *b)
     b->nitems = 0;
     for (int i = 0; i < b->nlinks; i++) kfree(b->links[i]);
     b->nlinks = 0;
+    b->nrules = 0;
+    b->csslen = 0;
     b->nruns = 0;
     b->laid_w = 0;
     b->scroll = 0;
     b->title[0] = 0;
 }
 
-static void add_item(struct web *b, int type, int style, int link, const char *s, u32 len)
+/* One item: a word, a line break or a paragraph break.  The style comes from
+ * the element that produced it (NULL means no style). */
+static void add_item(struct web *b, int type, const struct cstyle *c, int link, const char *s, u32 len, bool glue)
 {
+    static const struct cstyle none;
+    if (!c) c = &none;
+    u8 style = (c->bold ? ST_BOLD : 0) | (c->large ? ST_HEADING : 0) | (c->pre ? ST_PRE : 0) |
+               (c->underline ? ST_UNDERLINE : 0) | (c->colored ? ST_COLOR : 0);
     if (type != IT_WORD && b->nitems) {
         struct item *last = &b->items[b->nitems - 1];
         if (last->type == IT_PARA) return;                         /* collapse breaks */
@@ -76,7 +90,8 @@ static void add_item(struct web *b, int type, int style, int link, const char *s
     if (b->nitems == b->icap) { b->icap = b->icap ? b->icap * 2 : 256; b->items = krealloc(b->items, b->icap * sizeof *b->items); }
     if (len && b->tlen + len + 1 > b->tcap) { b->tcap = (b->tlen + len + 1) * 2; b->text = krealloc(b->text, b->tcap); }
     struct item *it = &b->items[b->nitems++];
-    it->type = (u8)type; it->style = (u8)style; it->link = (i16)link; it->off = b->tlen; it->len = len;
+    it->type = (u8)type; it->style = style; it->align = c->align; it->glue = glue; it->link = (i16)link;
+    it->color = c->color; it->off = b->tlen; it->len = len;
     if (len) { memcpy(b->text + b->tlen, s, len); b->tlen += len; }
 }
 
@@ -198,13 +213,377 @@ static const char *entity(const char *p, int *consumed, char tmp[2])
     return "&";
 }
 
+/* ---------------------------------------------------------------- CSS
+ * Core CSS: <style> blocks (collected before the page is read, so rules
+ * apply wherever they appear) and style="" attributes.  A selector is one
+ * compound (tag, .class, #id, or a combination); in a descendant selector
+ * only the last compound counts.  Pseudo-classes and at-rules (@media ...)
+ * are skipped.  Properties: color, background-color (ignored), font-weight,
+ * font-size, font-style (ignored: there is no italic face), text-align,
+ * text-decoration (underline), display (none).  Rules apply by specificity
+ * (tag, then class, then id), then the style attribute. */
+
+static bool ci_equal(const char *a, int n, const char *lit)
+{
+    return n == (int)strlen(lit) && !strncasecmp(a, lit, n);
+}
+
+static bool has_word(const char *v, int n, const char *w)
+{
+    int wl = strlen(w);
+    for (int i = 0; i + wl <= n; i++)
+        if (!strncasecmp(v + i, w, wl) && (i == 0 || v[i - 1] == ' ') && (i + wl == n || v[i + wl] == ' ')) return true;
+    return false;
+}
+
+static const char *skip_space(const char *p, const char *e)
+{
+    while (p < e && isspace((u8)*p)) p++;
+    return p;
+}
+
+static int hex_digit(char ch)
+{
+    if (ch >= '0' && ch <= '9') return ch - '0';
+    if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+    if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+    return -1;
+}
+
+static const struct { const char *name; u32 rgb; } named_colors[] = {
+    { "black", 0x000000 }, { "white", 0xFFFFFF }, { "red", 0xFF0000 }, { "green", 0x008000 },
+    { "lime", 0x00FF00 }, { "blue", 0x0000FF }, { "navy", 0x000080 }, { "darkblue", 0x00008B },
+    { "gray", 0x808080 }, { "grey", 0x808080 }, { "silver", 0xC0C0C0 }, { "lightgray", 0xD3D3D3 },
+    { "darkgray", 0xA9A9A9 }, { "maroon", 0x800000 }, { "darkred", 0x8B0000 }, { "purple", 0x800080 },
+    { "teal", 0x008080 }, { "aqua", 0x00FFFF }, { "cyan", 0x00FFFF }, { "fuchsia", 0xFF00FF },
+    { "magenta", 0xFF00FF }, { "yellow", 0xFFFF00 }, { "orange", 0xFFA500 }, { "gold", 0xFFD700 },
+    { "olive", 0x808000 }, { "brown", 0xA52A2A }, { "pink", 0xFFC0CB }, { "darkgreen", 0x006400 },
+};
+
+/* #rgb, #rrggbb, rgb(r, g, b) or a basic colour name */
+static bool parse_color(const char *v, int n, u32 *out)
+{
+    if (n > 0 && v[0] == '#') {
+        u32 h = 0;
+        for (int i = 1; i < n; i++) {
+            int d = hex_digit(v[i]);
+            if (d < 0) return false;
+            h = h * 16 + d;
+        }
+        if (n == 4) { u32 r = (h >> 8) & 15, g = (h >> 4) & 15, b = h & 15; *out = RGB(r * 17, g * 17, b * 17); return true; }
+        if (n == 7) { *out = h; return true; }
+        return false;
+    }
+    if (n > 4 && !strncasecmp(v, "rgb(", 4)) {
+        u32 part[3] = { 0, 0, 0 };
+        int k = 0;
+        for (int i = 4; i < n && k < 3; i++) {
+            if (v[i] >= '0' && v[i] <= '9') part[k] = part[k] * 10 + (v[i] - '0');
+            else if (v[i] == ',' || v[i] == ')') k++;
+        }
+        for (int i = 0; i < 3; i++) if (part[i] > 255) part[i] = 255;
+        *out = RGB(part[0], part[1], part[2]);
+        return true;
+    }
+    for (unsigned i = 0; i < sizeof named_colors / sizeof named_colors[0]; i++)
+        if (ci_equal(v, n, named_colors[i].name)) { *out = named_colors[i].rgb; return true; }
+    return false;
+}
+
+/* a length such as 12px, 1.5em, 120%, 10pt: returns it in tenths of its unit */
+static int css_length(const char *v, int n, char unit[4])
+{
+    int i = 0, val = 0, dec = 0;
+    bool any = false;
+    while (i < n && isdigit((u8)v[i])) { val = val * 10 + (v[i++] - '0'); any = true; }
+    if (i < n && v[i] == '.') {
+        i++;
+        if (i < n && isdigit((u8)v[i])) dec = v[i++] - '0';
+    }
+    if (!any) return -1;
+    int j = 0;
+    while (i < n && j < 3 && (isalpha((u8)v[i]) || v[i] == '%')) unit[j++] = (char)tolower((u8)v[i++]);
+    unit[j] = 0;
+    return val * 10 + dec;
+}
+
+static void css_font_size(struct cstyle *c, const char *v, int n)
+{
+    if (ci_equal(v, n, "large") || ci_equal(v, n, "x-large") || ci_equal(v, n, "xx-large") ||
+        ci_equal(v, n, "xxx-large") || ci_equal(v, n, "larger")) { c->large = 1; return; }
+    if (ci_equal(v, n, "medium") || ci_equal(v, n, "small") || ci_equal(v, n, "x-small") ||
+        ci_equal(v, n, "xx-small") || ci_equal(v, n, "smaller") || ci_equal(v, n, "normal")) { c->large = 0; return; }
+    char u[4];
+    int t = css_length(v, n, u);
+    if (t < 0) return;
+    int px10;                                 /* the size in tenths of a pixel; body text is 14 px */
+    if (!u[0] || !strcmp(u, "px")) px10 = t;
+    else if (!strcmp(u, "pt")) px10 = t * 4 / 3;
+    else if (!strcmp(u, "em") || !strcmp(u, "rem")) px10 = t * 14;
+    else if (!strcmp(u, "%")) px10 = t * 14 / 100;
+    else return;
+    c->large = px10 >= 180;                   /* 18 px and up uses the heading face */
+}
+
+static void apply_decl(struct cstyle *c, const char *name, int nl, const char *v, int vl)
+{
+    char u[4];
+    if (ci_equal(name, nl, "color")) {
+        u32 col;
+        if (parse_color(v, vl, &col)) { c->color = col; c->colored = 1; }
+    } else if (ci_equal(name, nl, "font-weight")) {
+        if (ci_equal(v, vl, "bold") || ci_equal(v, vl, "bolder")) c->bold = 1;
+        else if (ci_equal(v, vl, "normal") || ci_equal(v, vl, "lighter")) c->bold = 0;
+        else { int t = css_length(v, vl, u); if (t >= 0 && !u[0] && t / 10 >= 600) c->bold = 1; else if (t >= 0 && !u[0]) c->bold = 0; }
+    } else if (ci_equal(name, nl, "font-size")) {
+        css_font_size(c, v, vl);
+    } else if (ci_equal(name, nl, "text-align")) {
+        if (ci_equal(v, vl, "center")) c->align = 1;
+        else if (ci_equal(v, vl, "right") || ci_equal(v, vl, "end")) c->align = 2;
+        else if (ci_equal(v, vl, "left") || ci_equal(v, vl, "start") || ci_equal(v, vl, "justify")) c->align = 0;
+    } else if (ci_equal(name, nl, "text-decoration") || ci_equal(name, nl, "text-decoration-line")) {
+        if (has_word(v, vl, "underline")) c->underline = 1;
+        else if (has_word(v, vl, "none")) c->underline = 0;
+    } else if (ci_equal(name, nl, "display")) {
+        c->hidden = ci_equal(v, vl, "none");
+    }
+}
+
+/* a declaration list such as "color: red; font-weight: bold" (not NUL terminated) */
+static void apply_decls(struct cstyle *c, const char *d, int n)
+{
+    const char *end = d + n;
+    while (d < end) {
+        const char *semi = d;
+        while (semi < end && *semi != ';') semi++;
+        const char *colon = d;
+        while (colon < semi && *colon != ':') colon++;
+        if (colon < semi) {
+            const char *ns = skip_space(d, colon), *ne = colon;
+            while (ne > ns && isspace((u8)ne[-1])) ne--;
+            const char *vs = skip_space(colon + 1, semi), *ve = semi;
+            for (const char *b = vs; b < semi; b++) if (*b == '!') { ve = b; break; }   /* drop !important */
+            while (ve > vs && isspace((u8)ve[-1])) ve--;
+            apply_decl(c, ns, ne - ns, vs, ve - vs);
+        }
+        d = semi + 1;
+    }
+}
+
+static bool word_in(const char *list, const char *w, int wl)
+{
+    for (const char *p = list; *p;) {
+        while (*p == ' ') p++;
+        const char *e = p;
+        while (*e && *e != ' ') e++;
+        if (e - p == wl && !strncmp(p, w, wl)) return true;
+        p = e;
+    }
+    return false;
+}
+
+/* does a single compound selector ("p", ".note", "#main", "div.box") match? */
+static bool compound_match(const char *sel, const char *tag, const char *idv, const char *cls)
+{
+    char buf[64];
+    strlcpy(buf, sel, sizeof buf);
+    char *p = buf;
+    if (*p == '*') p++;
+    else if (*p && *p != '.' && *p != '#') {
+        char *e = p;
+        while (*e && *e != '.' && *e != '#') e++;
+        char save = *e;
+        *e = 0;
+        bool same = !strcasecmp(p, tag);
+        *e = save;
+        if (!same) return false;
+        p = e;
+    }
+    while (*p) {
+        char kind = *p++;
+        char *e = p;
+        while (*e && *e != '.' && *e != '#') e++;
+        int wl = e - p;
+        if (kind == '.') { if (!word_in(cls, p, wl)) return false; }
+        else if (kind == '#') { if (!idv || (int)strlen(idv) != wl || strncmp(idv, p, wl)) return false; }
+        else return false;
+        p = e;
+    }
+    return true;
+}
+
+static void add_rule(struct web *b, const char *sel, int sl, const char *decl, int dl)
+{
+    if (sl <= 0 || sl >= 48 || dl <= 0) return;
+    /* the last compound of a descendant selector, without pseudo-classes or attributes */
+    const char *last = sel + sl;
+    while (last > sel && !isspace((u8)last[-1]) && last[-1] != '>' && last[-1] != '+' && last[-1] != '~') last--;
+    int n = sel + sl - last;
+    if (n <= 0 || n >= 48) return;
+    for (int i = 0; i < n; i++) if (last[i] == ':' || last[i] == '[' || last[i] == '(') return;
+    if (b->nrules == b->rrcap) {
+        b->rrcap = b->rrcap ? b->rrcap * 2 : 64;
+        b->rules = krealloc(b->rules, b->rrcap * sizeof *b->rules);
+    }
+    if (b->csslen + dl + 1 > b->csscap) {
+        b->csscap = (b->csslen + dl + 1) * 2;
+        b->css = krealloc(b->css, b->csscap);
+    }
+    struct css_rule *r = &b->rules[b->nrules++];
+    memcpy(r->sel, last, n);
+    r->sel[n] = 0;
+    bool has_id = false, has_class = false;
+    for (int i = 0; i < n; i++) { has_id |= last[i] == '#'; has_class |= last[i] == '.'; }
+    r->spec = has_id ? 3 : has_class ? 2 : 1;
+    r->off = b->csslen;
+    r->len = dl;
+    memcpy(b->css + b->csslen, decl, dl);
+    b->csslen += dl;
+    b->css[b->csslen] = 0;
+}
+
+/* Reads a stylesheet: rules are "selectors { declarations }", comments are skipped. */
+static void parse_css(struct web *b, const char *c, const char *end)
+{
+    while (c < end) {
+        c = skip_space(c, end);
+        if (c + 1 < end && c[0] == '/' && c[1] == '*') {
+            const char *e = c + 2;
+            while (e + 1 < end && !(e[0] == '*' && e[1] == '/')) e++;
+            c = e + 2 < end ? e + 2 : end;
+            continue;
+        }
+        if (c >= end) break;
+        if (*c == '@') {                      /* at-rule: skip a ;-terminated one or a whole block */
+            const char *s = c, *semi = c;
+            while (semi < end && *semi != ';' && *semi != '{') semi++;
+            if (semi < end && *semi == ';') { c = semi + 1; continue; }
+            s = semi;
+            int depth = 0;
+            for (; s < end; s++) {
+                if (*s == '{') depth++;
+                else if (*s == '}' && --depth == 0) break;
+            }
+            c = s + 1;
+            continue;
+        }
+        const char *open = c;
+        while (open < end && *open != '{') open++;
+        if (open >= end) break;
+        const char *close = open + 1;
+        int depth = 1;
+        while (close < end && depth) {
+            if (*close == '{') depth++;
+            else if (*close == '}') depth--;
+            if (depth) close++;
+        }
+        for (const char *s = c; s < open;) {          /* selector list: "a, b.c, #d" */
+            const char *e = s;
+            while (e < open && *e != ',') e++;
+            const char *ss = skip_space(s, e), *se = e;
+            while (se > ss && isspace((u8)se[-1])) se--;
+            add_rule(b, ss, se - ss, open + 1, close - open - 1);
+            s = e + 1;
+        }
+        c = close + 1;
+    }
+}
+
+/* the case-insensitive position of needle in h, or NULL */
+static const char *find_ci(const char *h, const char *needle)
+{
+    int nl = strlen(needle);
+    for (; *h; h++)
+        if (!strncasecmp(h, needle, nl)) return h;
+    return NULL;
+}
+
+/* First pass: every <style> block in the page, so that rules apply everywhere. */
+static void collect_css(struct web *b, const char *h)
+{
+    for (const char *p = find_ci(h, "<style"); p; p = find_ci(p + 6, "<style")) {
+        const char *open = strchr(p, '>');
+        if (!open) break;
+        const char *close = find_ci(open + 1, "</style");
+        if (!close) close = open + strlen(open);
+        parse_css(b, open + 1, close);
+        p = close;
+    }
+}
+
+/* ---------------------------------------------------------------- parsing */
+/* Attributes of a tag (between q and e): href, class, id and style are kept. */
+static void tag_attrs(const char *q, const char *e, char *href, char *cls, char *idv, char *inl)
+{
+    const char *p = q;
+    while (p < e) {
+        while (p < e && (isspace((u8)*p) || *p == '/')) p++;
+        const char *ns = p;
+        while (p < e && (isalnum((u8)*p) || *p == '-' || *p == '_')) p++;
+        int nl = p - ns;
+        p = skip_space(p, e);
+        char val[256];
+        int vl = 0;
+        if (p < e && *p == '=') {
+            p = skip_space(p + 1, e);
+            char quote = (p < e && (*p == '"' || *p == '\'')) ? *p++ : 0;
+            while (p < e && vl < 255 && (quote ? *p != quote : !isspace((u8)*p))) val[vl++] = *p++;
+            if (quote && p < e && *p == quote) p++;
+        }
+        val[vl] = 0;
+        if (nl == 0) { p++; continue; }
+        char *dst = ci_equal(ns, nl, "href") ? href : ci_equal(ns, nl, "class") ? cls
+                  : ci_equal(ns, nl, "id") ? idv : ci_equal(ns, nl, "style") ? inl : NULL;
+        if (dst) {
+            int cap = dst == cls ? 128 : dst == idv ? 64 : 256;
+            int n = vl < cap - 1 ? vl : cap - 1;
+            memcpy(dst, val, n);
+            dst[n] = 0;
+        }
+    }
+}
+
+/* The style of an element: its parent's style, then the tag's defaults,
+ * then the matching stylesheet rules, then its style attribute. */
+static void element_style(struct web *b, struct cstyle *c, const char *tag, const char *idv, const char *cls, const char *inl)
+{
+    if (!strcmp(tag, "b") || !strcmp(tag, "strong")) c->bold = 1;
+    else if (!strcmp(tag, "h1") || !strcmp(tag, "h2") || !strcmp(tag, "h3")) { c->bold = 1; c->large = 1; c->colored = 1; c->color = RGB(20, 30, 60); }
+    else if (tag[0] == 'h' && tag[1] >= '4' && tag[1] <= '6' && !tag[2]) { c->bold = 1; c->colored = 1; c->color = RGB(20, 30, 60); }
+    else if (!strcmp(tag, "pre")) c->pre = 1;
+    else if (!strcmp(tag, "u") || !strcmp(tag, "ins")) c->underline = 1;
+    else if (!strcmp(tag, "center")) c->align = 1;
+    for (int spec = 1; spec <= 3; spec++)
+        for (int i = 0; i < b->nrules; i++) {
+            struct css_rule *r = &b->rules[i];
+            if (r->spec == spec && compound_match(r->sel, tag, idv, cls)) apply_decls(c, b->css + r->off, r->len);
+        }
+    if (inl[0]) apply_decls(c, inl, strlen(inl));
+}
+
+static bool void_tag(const char *t)
+{
+    return !strcmp(t, "br") || !strcmp(t, "hr") || !strcmp(t, "img") || !strcmp(t, "meta") ||
+           !strcmp(t, "link") || !strcmp(t, "input") || !strcmp(t, "wbr") || !strcmp(t, "col");
+}
+
+#define MAXDEPTH 48
+
 static void parse_html(struct web *b, const char *h, bool plain)
 {
-    int style = 0, link = -1, skip = 0;    /* skip > 0 while inside script/style/head junk */
+    struct cstyle stack[MAXDEPTH];
+    char stag[MAXDEPTH][16];
+    int depth = 0;
+    memset(stack, 0, sizeof stack);
+    struct cstyle *cur = &stack[0];
+    if (plain) cur->pre = 1;
+    if (!plain) collect_css(b, h);
+    int link = -1, skip = 0;               /* skip > 0 while inside script/noscript */
     char word[256];
     int wl = 0;
-#define FLUSH() do { if (wl) { add_item(b, IT_WORD, style, link, word, wl); wl = 0; } } while (0)
-    if (plain) style = ST_PRE;
+    bool word_glue = false;                /* the word directly follows text or a tag */
+    char prev = 0;                         /* the previous source character */
+#define FLUSH() do { if (wl && !cur->hidden) add_item(b, IT_WORD, cur, link, word, wl, word_glue); wl = 0; } while (0)
     for (const char *p = h; *p;) {
         if (*p == '<' && !plain) {
             FLUSH();
@@ -215,25 +594,17 @@ static void parse_html(struct web *b, const char *h, bool plain)
             char tag[16];
             int tl = 0;
             const char *q = p + 1 + close;
-            while (tl < 15 && (isalnum(*q))) tag[tl++] = (char)tolower(*q++);
+            while (tl < 15 && isalnum((u8)*q)) tag[tl++] = (char)tolower((u8)*q++);
             tag[tl] = 0;
-            /* attributes: we only care about href */
-            char href[256] = "";
-            const char *hp = q;
-            while (hp < e) {
-                if (!strncasecmp(hp, "href", 4) && (hp[4] == '=' || hp[4] == ' ')) {
-                    hp += 4;
-                    while (*hp == ' ' || *hp == '=') hp++;
-                    char quote = (*hp == '"' || *hp == '\'') ? *hp++ : 0;
-                    int k = 0;
-                    while (hp < e && *hp && (quote ? *hp != quote : *hp != ' ') && k < 255) href[k++] = *hp++;
-                    href[k] = 0;
-                    break;
-                }
-                hp++;
-            }
-            if (!strcmp(tag, "script") || !strcmp(tag, "style") || !strcmp(tag, "noscript")) skip += close ? -1 : 1;
+            char href[256] = "", cls[128] = "", idv[64] = "", inl[256] = "";
+            if (!close) tag_attrs(q, e, href, cls, idv, inl);
+            if (!strcmp(tag, "script") || !strcmp(tag, "noscript")) skip += close ? -1 : 1;
             if (skip < 0) skip = 0;
+            if (!strcmp(tag, "style") && !close) {          /* collected by collect_css */
+                const char *te = find_ci(e + 1, "</style");
+                p = te ? (strchr(te, '>') ? strchr(te, '>') + 1 : te + strlen(te)) : e + strlen(e);
+                continue;
+            }
             if (!strcmp(tag, "title") && !close) {
                 const char *te = strstr(e + 1, "</");
                 if (te) {
@@ -255,33 +626,50 @@ static void parse_html(struct web *b, const char *h, bool plain)
                     continue;
                 }
             }
-            if (!strcmp(tag, "br")) add_item(b, IT_BREAK, 0, -1, NULL, 0);
-            else if (!strcmp(tag, "p") || !strcmp(tag, "div") || !strcmp(tag, "ul") || !strcmp(tag, "ol") ||
-                     !strcmp(tag, "table") || !strcmp(tag, "tr") || !strcmp(tag, "section") || !strcmp(tag, "article") ||
-                     !strcmp(tag, "header") || !strcmp(tag, "footer") || !strcmp(tag, "nav") || !strcmp(tag, "blockquote") ||
-                     !strcmp(tag, "form") || !strcmp(tag, "hr") || !strcmp(tag, "dl") || !strcmp(tag, "dt") || !strcmp(tag, "dd"))
-                add_item(b, IT_PARA, 0, -1, NULL, 0);
-            else if (!strcmp(tag, "li") && !close) { add_item(b, IT_BREAK, 0, -1, NULL, 0); add_item(b, IT_WORD, 0, -1, "\x07", 1); }
-            else if (tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6' && !tag[2]) {
-                add_item(b, IT_PARA, 0, -1, NULL, 0);
-                if (close) style &= ~ST_HEADING; else style |= ST_HEADING;
-            } else if (!strcmp(tag, "b") || !strcmp(tag, "strong")) { if (close) style &= ~ST_BOLD; else style |= ST_BOLD; }
-            else if (!strcmp(tag, "pre")) { add_item(b, IT_PARA, 0, -1, NULL, 0); if (close) style &= ~ST_PRE; else style |= ST_PRE; }
-            else if (!strcmp(tag, "a")) {
-                if (!close && href[0] && b->nlinks < MAXLINKS) {
-                    b->links[b->nlinks] = kmalloc(strlen(href) + 1);
-                    strcpy(b->links[b->nlinks], href);
-                    link = b->nlinks++;
-                } else if (close) link = -1;
+            if (close) {
+                int i = depth - 1;
+                while (i >= 0 && strcmp(stag[i], tag)) i--;
+                if (i >= 0) {                                 /* close everything opened inside it too */
+                    depth = i;
+                    cur = depth ? &stack[depth - 1] : &stack[0];
+                    if (!strcmp(tag, "pre") || (tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') || !strcmp(tag, "p") ||
+                        !strcmp(tag, "div")) add_item(b, IT_PARA, cur, -1, NULL, 0, false);
+                    if (!strcmp(tag, "a")) link = -1;
+                }
+                if (!strcmp(tag, "a") && i < 0) link = -1;
+            } else {
+                bool hidden = cur->hidden;
+                if (!strcmp(tag, "br")) add_item(b, IT_BREAK, cur, -1, NULL, 0, false);
+                else if (!strcmp(tag, "p") || !strcmp(tag, "div") || !strcmp(tag, "ul") || !strcmp(tag, "ol") ||
+                         !strcmp(tag, "table") || !strcmp(tag, "tr") || !strcmp(tag, "section") || !strcmp(tag, "article") ||
+                         !strcmp(tag, "header") || !strcmp(tag, "footer") || !strcmp(tag, "nav") || !strcmp(tag, "blockquote") ||
+                         !strcmp(tag, "form") || !strcmp(tag, "hr") || !strcmp(tag, "dl") || !strcmp(tag, "dt") || !strcmp(tag, "dd") ||
+                         !strcmp(tag, "pre") || (tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6' && !tag[2]))
+                    add_item(b, IT_PARA, cur, -1, NULL, 0, false);
+                if (!strcmp(tag, "li")) { add_item(b, IT_BREAK, cur, -1, NULL, 0, false); add_item(b, IT_WORD, cur, -1, "\x07", 1, false); }
+                if (!void_tag(tag) && depth < MAXDEPTH) {
+                    stack[depth] = *cur;
+                    element_style(b, &stack[depth], tag, idv, cls, inl);
+                    if (!hidden && stack[depth].hidden) stack[depth].hidden = 1;
+                    if (hidden) stack[depth].hidden = 1;                /* hidden inherits */
+                    strlcpy(stag[depth], tag, sizeof stag[depth]);
+                    depth++;
+                    cur = &stack[depth - 1];
+                    if (!strcmp(tag, "a") && href[0] && b->nlinks < MAXLINKS) {
+                        b->links[b->nlinks] = kmalloc(strlen(href) + 1);
+                        strcpy(b->links[b->nlinks], href);
+                        link = b->nlinks++;
+                    }
+                }
             }
             p = e + 1;
             continue;
         }
-        if (skip) { p++; continue; }
+        if (skip || cur->hidden) { p++; continue; }
         char c = *p;
         if (c == '\r') { p++; continue; }
-        if ((style & ST_PRE) && c == '\n') { FLUSH(); add_item(b, IT_BREAK, 0, -1, NULL, 0); p++; continue; }
-        if (c == ' ' || c == '\t' || c == '\n') { FLUSH(); p++; continue; }
+        if (cur->pre && c == '\n') { FLUSH(); add_item(b, IT_BREAK, cur, -1, NULL, 0, false); prev = ' '; p++; continue; }
+        if (c == ' ' || c == '\t' || c == '\n') { FLUSH(); prev = ' '; p++; continue; }
         /* everything else becomes ASCII text: plain characters, entities, UTF-8 */
         char tmp[2];
         const char *text;
@@ -289,23 +677,49 @@ static void parse_html(struct web *b, const char *h, bool plain)
         if (c == '&' && !plain) { text = entity(p + 1, &n, tmp); n++; if (n == 1) text = "&"; }
         else if ((u8)c >= 0x80) text = uni_ascii(utf8_decode(p, &n), tmp);
         else { tmp[0] = c; tmp[1] = 0; text = (u8)c >= 32 ? tmp : ""; }
+        if (!wl && *text && *text != ' ') word_glue = prev && !isspace((u8)prev);
         for (; *text; text++) {
             if (*text == ' ') FLUSH();
             else if (wl < 255) word[wl++] = *text;
         }
         p += n;
+        prev = 'x';
     }
     FLUSH();
 #undef FLUSH
 }
 
 /* ---------------------------------------------------------------- layout */
+/* The UI face for a word: bold and heading (large) combine. */
+static int style_face(u8 style)
+{
+    bool bold = style & ST_BOLD, large = style & ST_HEADING;
+    return large ? (bold ? UI_FACE_LARGE_BOLD : UI_FACE_LARGE) : (bold ? UI_FACE_BOLD : UI_FACE_REG);
+}
+
 static int word_w(struct web *b, struct item *it)
 {
     char tmp[256];
     memcpy(tmp, b->text + it->off, it->len);
     tmp[it->len] = 0;
-    return (it->style & ST_PRE) ? (int)it->len * FONT_W : gfx_ui_width(tmp) + ((it->style & (ST_BOLD | ST_HEADING)) ? it->len : 0);
+    if (it->style & ST_PRE) return (int)it->len * FONT_W;
+    return gfx_ui_face_width(tmp, style_face(it->style));
+}
+
+/* Centres or right-aligns each visual line (a run of runs with the same line number). */
+static void align_lines(struct web *b, int width)
+{
+    int i = 0;
+    while (i < b->nruns) {
+        int line = b->runs[i].line, end = 0, j = i;
+        for (; j < b->nruns && b->runs[j].line == line; j++) end = MAX(end, b->runs[j].x + b->runs[j].w);
+        int free = width - end;
+        if (b->runs[i].align && free > 0) {
+            int dx = b->runs[i].align == 1 ? free / 2 : free;
+            for (int k = i; k < j; k++) b->runs[k].x += dx;
+        }
+        i = j;
+    }
 }
 
 static void layout(window_t *w)
@@ -321,12 +735,17 @@ static void layout(window_t *w)
         if (it->type == IT_BREAK) { x = 0; line++; continue; }
         if (it->type == IT_PARA) { x = 0; line += 2; continue; }
         int ww = word_w(b, it);
-        if (x > 0 && x + space + ww > width) { x = 0; line++; }
-        if (x > 0) x += space;
+        int gap = x > 0 && !it->glue ? space : 0;
+        if (x > 0 && x + gap + ww > width) { x = 0; line++; gap = 0; }
+        x += gap;
         if (b->nruns == b->rcap) { b->rcap = b->rcap ? b->rcap * 2 : 512; b->runs = krealloc(b->runs, b->rcap * sizeof *b->runs); }
-        b->runs[b->nruns++] = (struct run){ x, line, it->off, it->len, it->style, it->link };
+        struct run *r = &b->runs[b->nruns++];
+        r->x = x; r->line = line; r->w = ww;
+        r->off = it->off; r->len = it->len; r->style = it->style; r->align = it->align;
+        r->link = it->link; r->color = it->color;
         x += ww;
     }
+    align_lines(b, width);
     b->nlines = line + 1;
 }
 
@@ -357,12 +776,12 @@ static void paint(window_t *w)
         char tmp[256];
         memcpy(tmp, b->text + r->off, r->len);
         tmp[r->len] = 0;
-        u32 col = r->link >= 0 ? (r->link == b->hover_link ? RGB(200, 40, 40) : RGB(20, 70, 200)) : (r->style & ST_HEADING) ? RGB(20, 30, 60) : C_TEXT;
-        int tw;
-        if (r->style & ST_PRE) tw = gfx_text(s, x, y, tmp, col, COLOR_NONE);
-        else if (r->style & (ST_BOLD | ST_HEADING)) tw = gfx_ui_text_bold(s, x, y, tmp, col);
-        else tw = gfx_ui_text(s, x, y, tmp, col);
-        if (r->link >= 0) gfx_hline(s, x, y + 15, tw, col);
+        /* a CSS colour wins; links are blue (red while hovered) and text is black */
+        u32 col = (r->style & ST_COLOR) ? r->color : r->link >= 0 ? (r->link == b->hover_link ? RGB(200, 40, 40) : RGB(20, 70, 200)) : C_TEXT;
+        int face = style_face(r->style), tw, fh = gfx_ui_face_height(face);
+        if (r->style & ST_PRE) { tw = gfx_text(s, x, y, tmp, col, COLOR_NONE); fh = FONT_H; }
+        else tw = gfx_ui_face_text(s, x, y, tmp, face, col);
+        if (r->link >= 0 || (r->style & ST_UNDERLINE)) gfx_hline(s, x, y + fh - 1, tw, col);
     }
     s->clip = old;
     ui_vscroll(s, rect_make(c.x + c.w - 16, c.y, 16, c.h), b->nlines, vis_lines(b), b->scroll);
@@ -562,7 +981,7 @@ static void on_event(window_t *w, event_t *e)
     case EV_DESTROY:
         if (b->job) { netjob_cancel(b->job); netjob_release(b->job); }
         doc_clear(b);
-        kfree(b->text); kfree(b->items); kfree(b->runs); kfree(b);
+        kfree(b->text); kfree(b->items); kfree(b->runs); kfree(b->rules); kfree(b->css); kfree(b);
         break;
     }
 }
