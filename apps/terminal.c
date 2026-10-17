@@ -14,6 +14,7 @@
 #include "gui/clipboard.h"
 #include "gui/taskbar.h"
 #include "fs/vfs.h"
+#include "fs/fat32.h"
 #include "drivers/pit.h"
 #include "drivers/rtc.h"
 #include "drivers/ata.h"
@@ -532,6 +533,82 @@ static void cmd_volume(struct term *t, int argc, char **argv)
         sound_available() ? "AC'97 sound card" : "no sound card");
 }
 
+
+static void ferr(const char *cmd, const char *what, int e);
+static void fout(u32 color, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void fout(u32 color, const char *fmt, ...)      /* terminal output, also logged to the serial port for the tests */
+{
+    char buf[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
+    emit(cur_win->app, buf, color);
+    for (char *l = buf, *nl; *l; l = nl ? nl + 1 : l + strlen(l)) {
+        nl = strchr(l, '\n');
+        if (nl) *nl = 0;
+        if (*l) kprintf("[fat ] %s\n", l);
+        if (!nl) break;
+    }
+}
+
+/* fat: work with a FAT32 disk (a USB-stick style drive) next to the system disk. */
+static void cmd_fat(struct term *t, int argc, char **argv)
+{
+    const char *sub = argc > 1 ? argv[1] : "info";
+    if (!fat32_mounted()) {
+        int r = fat32_mount();
+        if (r) { fout(C_ERR, "fat: no FAT32 disk found (add a second drive formatted as FAT32)\n"); return; }
+    }
+    if (!strcmp(sub, "info")) {
+        int drv; u32 total, fr;
+        fat32_info(&drv, &total, &fr);
+        fout(C_FG, "FAT32 volume \"%s\" on %s: %u MiB, %u MiB free\n", fat32_label(), g_ata[drv].name, total / 1024, fr / 1024);
+    } else if (!strcmp(sub, "ls") || !strcmp(sub, "dir")) {
+        struct fat_item *it;
+        int n = fat32_list(argc > 2 ? argv[2] : "/", &it);
+        if (n < 0) { ferr("fat ls", argc > 2 ? argv[2] : "/", n); return; }
+        for (int i = 0; i < n; i++) {
+            if (it[i].dir) fout(C_DIR, "%-40s <DIR>\n", it[i].name);
+            else fout(C_FG, "%-40s %u\n", it[i].name, it[i].size);
+        }
+        fout(C_FG, "%d item(s)\n", n);
+        kfree(it);
+    } else if (!strcmp(sub, "cat") && argc > 2) {
+        char *d; u32 len;
+        int r = fat32_read(argv[2], &d, &len);
+        if (r) { ferr("fat cat", argv[2], r); return; }
+        fout(C_FG, "%s%s", d, len && d[len - 1] == '\n' ? "" : "\n");
+        kfree(d);
+    } else if (!strcmp(sub, "get") && argc > 3) {            /* fat get <fat path> <local path> */
+        char *d; u32 len; char p[NBFS_PATH_MAX];
+        int r = fat32_read(argv[2], &d, &len);
+        if (r) { ferr("fat get", argv[2], r); return; }
+        abs_path(t, argv[3], p);
+        r = vfs_write_all(p, d, len);
+        kfree(d);
+        if (r) ferr("fat get", argv[3], r); else fout(C_FG, "copied %u bytes to %s\n", len, p);
+    } else if (!strcmp(sub, "put") && argc > 3) {            /* fat put <local path> <fat path> */
+        char *d; u32 len; char p[NBFS_PATH_MAX];
+        abs_path(t, argv[2], p);
+        int r = vfs_read_all(p, &d, &len);
+        if (r) { ferr("fat put", argv[2], r); return; }
+        r = fat32_write(argv[3], d, len);
+        kfree(d);
+        if (r) ferr("fat put", argv[3], r); else fout(C_FG, "copied %u bytes to %s\n", len, argv[3]);
+    } else if (!strcmp(sub, "mkdir") && argc > 2) {
+        int r = fat32_mkdir(argv[2]);
+        if (r) ferr("fat mkdir", argv[2], r);
+    } else if ((!strcmp(sub, "rm") || !strcmp(sub, "del")) && argc > 2) {
+        int r = fat32_remove(argv[2]);
+        if (r) ferr("fat rm", argv[2], r);
+    } else {
+        fout(C_ERR, "usage: fat [info | ls [dir] | cat <file> | get <file> <local> | put <local> <file> | mkdir <dir> | rm <path>]\n");
+    }
+}
+
+static void ferr(const char *cmd, const char *what, int e) { fout(C_ERR, "%s: %s: %s\n", cmd, what, nbfs_strerror(e)); }
+
 static void cmd_uname(struct term *t, int argc, char **argv) { out(C_FG, "NimbusOS " NIMBUS_VERSION " x86_64 (64-bit long mode)\n"); }
 static void cmd_pwd(struct term *t, int argc, char **argv) { out(C_FG, "%s\n", t->cwd); }
 
@@ -542,7 +619,7 @@ static const struct { const char *name; void (*fn)(struct term *, int, char **);
     { "stat", cmd_stat }, { "df", cmd_df }, { "mem", cmd_mem }, { "free", cmd_mem }, { "ps", cmd_ps },
     { "date", cmd_date }, { "uptime", cmd_uptime }, { "fsck", cmd_fsck }, { "open", cmd_open },
     { "history", cmd_history }, { "uname", cmd_uname }, { "play", cmd_play }, { "beep", cmd_beep },
-    { "volume", cmd_volume },
+    { "volume", cmd_volume }, { "fat", cmd_fat },
 };
 
 /* Find an executable: a path, or NAME / NAME.elf in the current directory
