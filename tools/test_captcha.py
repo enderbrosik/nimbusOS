@@ -22,7 +22,7 @@ COLORS = [(220, 40, 40), (40, 160, 60), (50, 80, 220)]
 def png(i):
     b = io.BytesIO(); Image.new("RGB", (64, 64), COLORS[i]).save(b, "PNG"); return b.getvalue()
 
-seen = {"gets": [], "posts": [], "cookies": []}
+seen = {"gets": [], "posts": [], "cookies": [], "agents": []}
 class H(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
     def send(self, code, body, ctype="text/html", extra=()):
@@ -32,7 +32,7 @@ class H(http.server.BaseHTTPRequestHandler):
         for k, v in extra: self.send_header(k, v)
         self.end_headers(); self.wfile.write(body)
     def do_GET(self):
-        seen["gets"].append(self.path); seen["cookies"].append((self.path, self.headers.get("Cookie", "")))
+        seen["gets"].append(self.path); seen["agents"].append(self.headers.get("User-Agent", "")); seen["cookies"].append((self.path, self.headers.get("Cookie", "")))
         if self.path.startswith("/pic"):
             return self.send(200, png(int(self.path[4])), "image/png")
         if self.path == "/ok":
@@ -67,6 +67,10 @@ try:
         q.key("ctrl-l"); time.sleep(0.3); q.type("https://10.0.2.2:8446/\n")
         q.wait_serial(r'loaded https://10\.0\.2\.2:8446/: HTTP 200', 30)
         time.sleep(3.0); q.screenshot(f"{S}/captcha-page.png")
+        q.key("ctrl-u"); time.sleep(0.3)                  # switch to the Chrome preset, then reload the page
+        q.key("ctrl-l"); time.sleep(0.3); q.type("https://10.0.2.2:8446/\n")
+        q.wait_serial(r'loaded https://10\.0\.2\.2:8446/: HTTP 200', 30)
+        time.sleep(3.0)
         if True:
             for b in (BOX[0], BOX[2]): q.click(*b); time.sleep(0.3)
             q.screenshot(f"{S}/captcha-ticked.png")
@@ -82,6 +86,7 @@ if True:
     assert urllib.parse.parse_qs(body) == {"token": ["t123"], "pick": ["0", "2"]}, body
     assert "session=abc" in ck, ck
     assert [c for p, c in seen["cookies"] if p == "/ok"][0].count("challenge=passed") == 1
+    assert seen["agents"][0].startswith("NimbusOS/") and "Chrome/" in seen["agents"][-1], seen["agents"]
     print("captcha: PASS")
 else:
     print("calibration run", seen["gets"])

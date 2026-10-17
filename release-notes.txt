@@ -4,6 +4,7 @@ Web Browser: pictures (PNG, GIF and JPEG) load after the page, scaled to fit, an
 Web Browser: forms with text boxes, buttons, check boxes and radio buttons (GET and POST), so search pages and their Next buttons work
 Web Browser: lists with bullets and numbers, indents, rules, italic text, accented letters and real curly quotes
 Web Browser: old HTML markup (font colours and sizes, align, body colours) and search pages with menus and icons display cleanly
+Web Browser: user-agent switching (Ctrl+U cycles NimbusOS, Chrome, Edge, Firefox, Safari, Android, Lynx); cookies are kept while the browser runs
 Web Browser: search the web by typing words in the address bar (DuckDuckGo), result links go straight to the page, and links with queries, ../ and #fragments work
 Text: the UI font is now anti-aliased DejaVu Sans, regular and bold, so text is smoother at every size
 Web Browser: CSS support: <style> blocks, colours, bold, font sizes, centred and right-aligned text, underline, and hidden elements

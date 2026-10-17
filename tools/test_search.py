@@ -5,7 +5,7 @@ as //duckduckgo.com/l/?uddg=<encoded target>&amp;rut=... .  The guest's search_u
 setting points at it, so the test checks, end to end:
 
 * words typed in the address bar become a search URL (spaces -> '+');
-* the request carries a browser-style User-Agent;
+* the request carries the honest default User-Agent (NimbusOS/<version>);
 * &amp; in links is decoded and the uddg wrapper is removed, so clicking a result
   goes straight to the target with its query string intact.
 The real duckduckgo.com is not used (the test environment has no internet)."""
@@ -132,5 +132,5 @@ assert len(seen["posts"]) == 1, seen["posts"]
 path, body, ctype = seen["posts"][0]
 assert path == "/html/" and ctype == "application/x-www-form-urlencoded", (path, ctype)
 assert urllib.parse.parse_qs(body) == {"q": ["second query"], "kl": ["us-en"]}, body        # typed text + hidden field
-assert all("Mozilla/5.0" in a and "NimbusOS" in a for a in seen["agents"]), seen["agents"]
+assert all(a.startswith("NimbusOS/") for a in seen["agents"]), seen["agents"]
 print("search: PASS")

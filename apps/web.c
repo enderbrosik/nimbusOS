@@ -1857,6 +1857,10 @@ static void on_event(window_t *w, event_t *e)
         else if (k->key == KEY_HOME) scroll_by(w, -1000000);
         else if (k->key == KEY_END) scroll_by(w, 1000000);
         else if (k->key == KEY_BACKSPACE && b->nhist) { char u[256]; strlcpy(u, b->history[--b->nhist], sizeof u); navigate(w, u, false); }
+        else if ((k->mods & MOD_CTRL) && k->key == 'u') {
+            snprintf(b->status, sizeof b->status, "Identifying as %s (Ctrl+U switches; reload to apply)", http_ua_next());
+            paint(w);
+        }
         else if ((k->mods & MOD_CTRL) && k->key == 'l') { b->addr_focus = true; b->addr.sel = 0; b->addr.cursor = b->addr.len; paint(w); }
         break;
     }

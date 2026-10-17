@@ -43,6 +43,8 @@ void tcp_close(int s);
 /* HTTP/1.0 GET of an http:// URL (follows up to 3 redirects).  *body is
  * kmalloc'ed; *status gets the HTTP status code. */
 const char *net_tls_error(void);            /* detail for NET_ETLS */
+const char *http_ua_name(void);             /* current user-agent preset: NimbusOS, Chrome, Edge, ... */
+const char *http_ua_next(void);             /* switch to the next preset (saved in settings) */
 const char *http_last_security(void);       /* cipher of the last https request, "" for http */
 int  http_get(const char *url, char **body, u32 *len, int *status, char *final_url, int urlmax);
 /* Like http_get; with a non-NULL post body it sends a form POST (a redirect answer is followed with GET). */

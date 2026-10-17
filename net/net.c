@@ -13,6 +13,7 @@
  * enough on this uniprocessor kernel.
  */
 #include "net/net.h"
+#include "kernel/settings.h"
 #include "net/tls.h"
 #include "drivers/e1000.h"
 #include "drivers/pit.h"
@@ -877,6 +878,34 @@ static char *find_header(char *buf, char *hdr_end, const char *name)
  * Sites use cookies to remember a visit: that a challenge was passed, a language choice, a
  * session.  Cookies are kept per host (or per Domain= they set, if it covers the host), are
  * sent back to that host only, never over plain http when marked Secure, and never logged. */
+/* User-agent presets the browser can switch between (setting "user_agent" holds the name).
+ * NimbusOS is the default and says what the browser really is; the others are for sites
+ * that serve different pages per browser. */
+static const struct { const char *name, *ua; } ua_presets[] = {
+    { "NimbusOS", "NimbusOS/" NIMBUS_VERSION " (text browser; +https://nimbusos.vercel.app)" },
+    { "Chrome", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36" },
+    { "Edge", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0" },
+    { "Firefox", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0" },
+    { "Safari", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15" },
+    { "Android", "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36" },
+    { "Lynx", "Lynx/2.9.0 libwww-FM/2.14" },
+};
+#define UA_N ((int)(sizeof ua_presets / sizeof ua_presets[0]))
+static int ua_cur = -1;
+static void ua_load(void) {
+    if (ua_cur >= 0) return;
+    ua_cur = 0;
+    const char *n = settings_get("user_agent", "NimbusOS");
+    for (int i = 0; i < UA_N; i++) if (!strcasecmp(n, ua_presets[i].name)) ua_cur = i;
+}
+const char *http_ua_name(void) { ua_load(); return ua_presets[ua_cur].name; }
+const char *http_ua_next(void) {         /* switches to the next preset and remembers it */
+    ua_load();
+    ua_cur = (ua_cur + 1) % UA_N;
+    settings_set("user_agent", ua_presets[ua_cur].name);
+    return ua_presets[ua_cur].name;
+}
+
 #define JAR_N 32
 static struct cookie { char host[96], name[40], value[120]; bool secure, used; } jar[JAR_N];
 
@@ -1031,9 +1060,9 @@ int http_request(const char *url_in, const char *post, char **body, u32 *blen, i
         jar_header(host, use_tls, ck, sizeof ck);
         if (post) snprintf(extra, sizeof extra, "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %u\r\n", (u32)strlen(post));
         int n = snprintf(req, sizeof req,
-            "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (compatible; NimbusOS/" NIMBUS_VERSION "; text browser)\r\n"
+            "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\n"
             "Accept: text/html, text/plain, */*\r\nAccept-Language: en-US,en;q=0.8\r\n%s%s"
-            "Accept-Encoding: identity\r\nConnection: close\r\n\r\n", post ? "POST" : "GET", path, host, extra, ck);
+            "Accept-Encoding: identity\r\nConnection: close\r\n\r\n", post ? "POST" : "GET", path, host, (ua_load(), ua_presets[ua_cur].ua), extra, ck);
         if (conn_send(&c, req, n) < 0 || (post && conn_send(&c, post, strlen(post)) < 0)) { conn_close(&c); return NET_ERESET; }
         u32 cap = 16384, len = 0;
         char *buf = kmalloc(cap + 1);
