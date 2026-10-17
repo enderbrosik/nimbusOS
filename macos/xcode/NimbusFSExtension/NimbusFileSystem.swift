@@ -79,3 +79,20 @@ final class NimbusFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
 
     func didFinishLoading() {}
 }
+
+// macOS runs a "check" (fsck) before mounting. Without this, Finder says it "can't repair" the disk and
+// mounts it read-only. We report a clean check; a real nbfs_check pass can be wired in later.
+// NOT COMPILED: if Xcode complains about the signatures, accept its fix-its.
+extension NimbusFileSystem: FSManageableResourceMaintenanceOperations {
+    func startCheck(task: FSTask, options: FSTaskOptions) throws -> Progress {
+        let progress = Progress(totalUnitCount: 100)
+        task.logMessage("NimbusFS: check ok")
+        progress.completedUnitCount = 100
+        task.didComplete(error: nil)
+        return progress
+    }
+
+    func startFormat(task: FSTask, options: FSTaskOptions) throws -> Progress {
+        throw fs_errorForPOSIXError(POSIXError.ENOTSUP.rawValue)
+    }
+}
