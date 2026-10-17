@@ -45,7 +45,7 @@ struct run { int x, line, w, h; u32 off, len, color; u8 style, align, kind; i16 
 
 /* form controls */
 enum { FK_TEXT, FK_PASSWORD, FK_HIDDEN, FK_SUBMIT, FK_CHECK, FK_RADIO };
-struct field { char name[40], value[160]; textfield_t tf; u8 kind, checked, form, size; };   /* form 255: not in a form */
+struct field { char name[40], value[160], label[40]; textfield_t tf; u8 kind, checked, form, size; };   /* form 255: not in a form */
 struct form { char action[200]; u8 post; };
 
 /* pictures (<img>), fetched one at a time after the page itself */
@@ -710,6 +710,9 @@ static void element_style(struct web *b, struct cstyle *c, const char *tag, cons
     else if (!strcmp(tag, "center")) c->align = 1;
     else if (!strcmp(tag, "tt") || !strcmp(tag, "code") || !strcmp(tag, "kbd") || !strcmp(tag, "samp")) c->mono = 1;
     else if (!strcmp(tag, "big")) c->large = 1;
+    else if (!strcmp(tag, "select") || !strcmp(tag, "textarea") || !strcmp(tag, "svg") || !strcmp(tag, "template") ||
+             !strcmp(tag, "iframe") || !strcmp(tag, "canvas") || !strcmp(tag, "video") || !strcmp(tag, "audio") ||
+             !strcmp(tag, "object")) c->hidden = 1;          /* menus, scripts' leftovers, embedded things: not text */
     else if (!strcmp(tag, "th")) { c->bold = 1; c->align = 1; }
     else if (!strcmp(tag, "i") || !strcmp(tag, "em") || !strcmp(tag, "cite") || !strcmp(tag, "var") ||
              !strcmp(tag, "dfn") || !strcmp(tag, "address")) c->italic = 1;
@@ -726,7 +729,7 @@ static void element_style(struct web *b, struct cstyle *c, const char *tag, cons
 
 /* An <input>: text boxes, passwords, buttons, check boxes and radio buttons are drawn; hidden
  * ones are kept for submitting.  Other types (file, image, ...) are ignored. */
-static void add_input(struct web *b, const struct cstyle *c, int form, const char *q, const char *e)
+static void add_input(struct web *b, const struct cstyle *c, int form, const char *q, const char *e, const char *label)
 {
     char type[16] = "text", name[40] = "", val[160] = "", size[8] = "", tmp[4];
     get_attr(q, e, "type", type, sizeof type);
@@ -736,7 +739,7 @@ static void add_input(struct web *b, const struct cstyle *c, int form, const cha
     bool checked = get_attr(q, e, "checked", tmp, sizeof tmp);
     int kind;
     if (!strcasecmp(type, "hidden")) kind = FK_HIDDEN;
-    else if (!strcasecmp(type, "submit")) kind = FK_SUBMIT;
+    else if (!strcasecmp(type, "submit") || !strcasecmp(type, "image")) kind = FK_SUBMIT;
     else if (!strcasecmp(type, "checkbox")) kind = FK_CHECK;
     else if (!strcasecmp(type, "radio")) kind = FK_RADIO;
     else if (!strcasecmp(type, "password")) kind = FK_PASSWORD;
@@ -753,6 +756,7 @@ static void add_input(struct web *b, const struct cstyle *c, int form, const cha
     f->size = (u8)(sz > 0 && sz < 80 ? sz : 20);
     strlcpy(f->name, name, sizeof f->name);
     strlcpy(f->value, val, sizeof f->value);
+    strlcpy(f->label, label ? label : val, sizeof f->label);
     if (kind == FK_TEXT || kind == FK_PASSWORD) tf_set(&f->tf, val);
     int idx = b->nfields++;
     if (kind != FK_HIDDEN) {
@@ -771,6 +775,8 @@ static void add_image(struct web *b, const struct cstyle *c, int link, const cha
     get_attr(q, e, "alt", alt, sizeof alt);
     get_attr(q, e, "width", w, sizeof w);
     get_attr(q, e, "height", h, sizeof h);
+    int sw = strchr(w, '%') ? 0 : atoi(w), sh = strchr(h, '%') ? 0 : atoi(h);
+    if (!alt[0] && sw > 0 && sh > 0 && sw <= 24 && sh <= 24) return;      /* a tiny decorative icon (favicons in result lists) */
     int idx = b->nimages++;
     struct image *im = &b->images[idx];
     memset(im, 0, sizeof *im);
@@ -780,6 +786,9 @@ static void add_image(struct web *b, const struct cstyle *c, int link, const cha
     im->dw = dw > 0 && dw <= 4096 ? dw : 0;
     im->dh = dh > 0 && dh <= 4096 ? dh : 0;
     im->state = src[0] && strncmp(src, "data:", 5) ? 0 : 3;
+    int sl = 0;                                                     /* .svg and .ico are not decoded: show the alt text */
+    while (src[sl] && src[sl] != '?' && src[sl] != '#') sl++;
+    if ((sl > 4 && !strncasecmp(src + sl - 4, ".svg", 4)) || (sl > 4 && !strncasecmp(src + sl - 4, ".ico", 4))) im->state = 3;
     add_item(b, IT_IMAGE, c, link, NULL, 0, false);
     b->items[b->nitems - 1].image = (i16)idx;
 }
@@ -945,7 +954,28 @@ static void parse_html(struct web *b, const char *h, bool plain)
                         cur_form = b->nforms++;
                     } else cur_form = -1;
                 } else if (!hidden && !strcmp(tag, "input")) {
-                    add_input(b, cur, cur_form, q, e);
+                    add_input(b, cur, cur_form, q, e, NULL);
+                } else if (!hidden && !strcmp(tag, "button")) {
+                    char type[16] = "submit";
+                    get_attr(q, e, "type", type, sizeof type);
+                    const char *close_tag = find_ci(e + 1, "</button");
+                    if (!strcasecmp(type, "submit") && close_tag) {
+                        char label[40];
+                        int o = 0;
+                        bool in_tag = false;
+                        for (const char *t = e + 1; t < close_tag && o < 39; t++) {       /* the text inside, without tags */
+                            if (*t == '<') in_tag = true;
+                            else if (*t == '>') in_tag = false;
+                            else if (!in_tag && (u8)*t >= 32 && (u8)*t < 127 && !(*t == ' ' && (o == 0 || label[o - 1] == ' '))) label[o++] = *t;
+                        }
+                        while (o > 0 && label[o - 1] == ' ') o--;
+                        label[o] = 0;
+                        add_input(b, cur, cur_form, q, e, label[0] ? label : "Submit");
+                        const char *gt = strchr(close_tag, '>');
+                        p = gt ? gt + 1 : close_tag + strlen(close_tag);
+                        prev = ' ';
+                        continue;
+                    }
                 } else if (!hidden && !strcmp(tag, "img")) {
                     add_image(b, cur, link, q, e);
                 } else if (!hidden && tdepth < 6 && !strcmp(tag, "table")) {
@@ -1073,7 +1103,7 @@ static void image_size(const struct image *im, int maxw, int *w, int *h)
 
 static int field_w(const struct field *f, int width)
 {
-    if (f->kind == FK_SUBMIT) return gfx_ui_width(f->value[0] ? f->value : "Submit") + 24;
+    if (f->kind == FK_SUBMIT) return gfx_ui_width(f->label[0] ? f->label : "Submit") + 24;
     if (f->kind == FK_CHECK || f->kind == FK_RADIO) return 18;
     return MAX(100, MIN(f->size * 8 + 8, width));
 }
@@ -1321,7 +1351,7 @@ static void draw_field(surface_t *s, struct web *b, const struct run *r, int x, 
     const struct field *f = &b->fields[r->field];
     rect_t fr = rect_make(x, y - 2, r->w, 21);
     switch (f->kind) {
-    case FK_SUBMIT: ui_button(s, fr, f->value[0] ? f->value : "Submit", BTN_NORMAL); break;
+    case FK_SUBMIT: ui_button(s, fr, f->label[0] ? f->label : "Submit", BTN_NORMAL); break;
     case FK_CHECK: ui_checkbox(s, fr.x, fr.y + 3, f->checked, ""); break;
     case FK_RADIO: ui_radio(s, fr.x, fr.y + 3, f->checked, ""); break;
     case FK_PASSWORD: {

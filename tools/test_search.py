@@ -49,12 +49,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         q = urllib.parse.parse_qs(body).get("q", [""])[0]
         self.answer(self.results(q))
     def results(self, q):
+        options = "".join(f'<option value="r{i}">Region number {i}</option>' for i in range(200))
         if True:
             t1 = wrapped("https://10.0.2.2:8445/target.html?" + TARGET_QUERY)
             t2 = wrapped("https://10.0.2.2:8445/other.html")
             body = f"""<html><head><title>{q} at DuckDuckGo</title></head><body>
-<form action="/html/" method="post"><input type="text" name="q" value="{q}"><input type="hidden" name="kl" value="us-en"><input type="submit" value="S"></form>
+<div id="header"><a class="header__logo-wrap" href="/html/"><img class="header__logo" src="//duckduckgo.com/assets/logo_header.v108.svg" alt="DuckDuckGo"></a>
+<form action="/html/" method="post"><input type="text" name="q" value="{q}"><input type="hidden" name="kl" value="us-en"><select name="region"><option value="">All Regions</option>{options}</select><button type="submit" name="go" value="1">Search <b>now</b></button></form></div>
 <div class="result"><h2 class="result__title"><a class="result__a" href="{t1}">NimbusOS hobby OS</a></h2>
+<span class="result__icon"><a href="{t1}"><img class="result__icon__img" width="16" height="16" alt="" src="//external-content.duckduckgo.com/ip3/10.0.2.2.ico" name="i"></a></span>
 <a class="result__url" href="{t1}">10.0.2.2:8445/target.html</a>
 <a class="result__snippet" href="{t1}">A hobby <b>operating system</b> written from scratch.</a></div>
 <div class="result"><h2 class="result__title"><a class="result__a" href="{t2}">Another result</a></h2></div>
@@ -90,7 +93,7 @@ server.socket = ctx.wrap_socket(server.socket, server_side=True)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 time.sleep(0.5)
 
-LINK1 = (170, 217)          # the first result title link, below the results page's own search form
+LINK1 = (170, 253)          # the first result title link, below the logo and the results page's own search form
 try:
     with Qemu([IMG], name="search") as q:
         q.wait_serial(r"Desktop ready", timeout=40)
@@ -107,7 +110,7 @@ try:
         time.sleep(1.0)
         q.screenshot(f"{S}/search-results.png")
         # the results page has its own search form: click the box, replace the words, press Enter (POST)
-        q.click(200, 178)
+        q.click(200, 213)
         time.sleep(0.3)
         q.key("ctrl-a")
         q.type("second query\n", delay=0.04)
@@ -124,6 +127,7 @@ finally:
 
 assert "/html/?q=nimbus+os+search" in seen["requests"], seen["requests"]
 assert "/target.html?" + TARGET_QUERY in seen["requests"], seen["requests"]
+assert not [r for r in seen["requests"] if "logo" in r or ".ico" in r or ".svg" in r], seen["requests"]     # no pictures fetched for icons and svg
 assert len(seen["posts"]) == 1, seen["posts"]
 path, body, ctype = seen["posts"][0]
 assert path == "/html/" and ctype == "application/x-www-form-urlencoded", (path, ctype)
