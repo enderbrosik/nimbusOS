@@ -13,6 +13,7 @@
 #include "gui/wm.h"
 #include "gui/widgets.h"
 #include "gui/icons.h"
+#include "gui/imgdec.h"
 #include "gui/theme.h"
 #include "net/net.h"
 #include "net/netjob.h"
@@ -31,20 +32,24 @@
 #define SEARCH_URL "https://html.duckduckgo.com/html/?q="
 
 enum { ST_NORMAL = 0, ST_BOLD = 1, ST_HEADING = 2, ST_PRE = 4, ST_UNDERLINE = 8, ST_COLOR = 16, ST_ITALIC = 32, ST_MARKER = 64, ST_RULE = 128 };
-enum { IT_WORD, IT_BREAK, IT_PARA, IT_RULE, IT_GAP, IT_INPUT };
+enum { IT_WORD, IT_BREAK, IT_PARA, IT_RULE, IT_GAP, IT_INPUT, IT_IMAGE };
 #define INDENT_PX 24                /* one level of list or blockquote indentation */
 
 /* the computed style of an element (inherited by its children) */
 struct cstyle { u8 bold, large, pre, underline, align, hidden, colored, italic, indent, marker; u32 color; };
 struct css_rule { char sel[48]; u8 spec; u32 off, len; };     /* declarations are in web.css */
 
-struct item { u8 type, style, align, glue, indent; i16 link, field; u32 off, len, color; };
-struct run { int x, line, w; u32 off, len, color; u8 style, align; i16 link, field; };
+struct item { u8 type, style, align, glue, indent; i16 link, field, image; u32 off, len, color; };
+struct run { int x, line, w, h; u32 off, len, color; u8 style, align; i16 link, field, image; };   /* h: the height of an image */
 
 /* form controls */
 enum { FK_TEXT, FK_PASSWORD, FK_HIDDEN, FK_SUBMIT, FK_CHECK, FK_RADIO };
 struct field { char name[40], value[160]; textfield_t tf; u8 kind, checked, form, size; };   /* form 255: not in a form */
 struct form { char action[200]; u8 post; };
+
+/* pictures (<img>), fetched one at a time after the page itself */
+#define MAXIMAGES 32
+struct image { char src[200], alt[64]; surface_t *surf; u8 state; int dw, dh; };   /* state: 0 waiting, 1 loading, 2 shown, 3 failed */
 
 struct web {
     textfield_t addr;
@@ -60,6 +65,8 @@ struct web {
     struct field *fields; int nfields, fcap;
     int focus;                              /* the field being edited, or -1 */
     struct form forms[8]; int nforms;
+    struct image images[MAXIMAGES]; int nimages;
+    struct netjob *img_job; int img_cur;
     /* layout */
     struct run *runs; int nruns, rcap, nlines, laid_w;
     int scroll;                 /* in lines */
@@ -77,6 +84,9 @@ static void doc_clear(struct web *b)
     b->nfields = 0;
     b->nforms = 0;
     b->focus = -1;
+    for (int i = 0; i < b->nimages; i++) if (b->images[i].surf) surface_destroy(b->images[i].surf);
+    b->nimages = 0;
+    if (b->img_job) { netjob_cancel(b->img_job); netjob_release(b->img_job); b->img_job = NULL; }
     for (int i = 0; i < b->nlinks; i++) kfree(b->links[i]);
     b->nlinks = 0;
     b->nrules = 0;
@@ -108,7 +118,7 @@ static void add_item(struct web *b, int type, const struct cstyle *c, int link, 
     if (len && b->tlen + len + 1 > b->tcap) { b->tcap = (b->tlen + len + 1) * 2; b->text = krealloc(b->text, b->tcap); }
     struct item *it = &b->items[b->nitems++];
     it->type = (u8)type; it->style = style; it->align = c->align; it->glue = glue; it->indent = c->indent; it->link = (i16)link;
-    it->color = c->color; it->off = b->tlen; it->len = len; it->field = -1;
+    it->color = c->color; it->off = b->tlen; it->len = len; it->field = -1; it->image = -1;
     if (len) { memcpy(b->text + b->tlen, s, len); b->tlen += len; }
 }
 
@@ -716,6 +726,29 @@ static void add_input(struct web *b, const struct cstyle *c, int form, const cha
     }
 }
 
+/* An <img>: its picture is fetched after the page has loaded; until then (or if it fails) the
+ * alt text is shown in a box of the declared size. */
+static void add_image(struct web *b, const struct cstyle *c, int link, const char *q, const char *e)
+{
+    if (b->nimages >= MAXIMAGES) return;
+    char src[200] = "", alt[64] = "", w[12] = "", h[12] = "";
+    get_attr(q, e, "src", src, sizeof src);
+    get_attr(q, e, "alt", alt, sizeof alt);
+    get_attr(q, e, "width", w, sizeof w);
+    get_attr(q, e, "height", h, sizeof h);
+    int idx = b->nimages++;
+    struct image *im = &b->images[idx];
+    memset(im, 0, sizeof *im);
+    strlcpy(im->src, src, sizeof im->src);
+    strlcpy(im->alt, alt, sizeof im->alt);
+    int dw = strchr(w, '%') ? 0 : atoi(w), dh = strchr(h, '%') ? 0 : atoi(h);
+    im->dw = dw > 0 && dw <= 4096 ? dw : 0;
+    im->dh = dh > 0 && dh <= 4096 ? dh : 0;
+    im->state = src[0] && strncmp(src, "data:", 5) ? 0 : 3;
+    add_item(b, IT_IMAGE, c, link, NULL, 0, false);
+    b->items[b->nitems - 1].image = (i16)idx;
+}
+
 static bool block_tag(const char *t)
 {
     static const char *names[] = { "p", "div", "ul", "ol", "li", "table", "tr", "td", "th", "section", "article", "header",
@@ -850,6 +883,8 @@ static void parse_html(struct web *b, const char *h, bool plain)
                     } else cur_form = -1;
                 } else if (!hidden && !strcmp(tag, "input")) {
                     add_input(b, cur, cur_form, q, e);
+                } else if (!hidden && !strcmp(tag, "img")) {
+                    add_image(b, cur, link, q, e);
                 }
                 if (!void_tag(tag) && depth < MAXDEPTH) {
                     stack[depth] = *cur;
@@ -934,8 +969,22 @@ static struct run *new_run(struct web *b, int x, int line, int w, const struct i
     struct run *r = &b->runs[b->nruns++];
     r->x = x; r->line = line; r->w = w;
     r->off = it->off; r->len = it->len; r->style = it->style; r->align = it->align;
-    r->link = it->link; r->color = it->color; r->field = it->field;
+    r->link = it->link; r->color = it->color; r->field = it->field; r->image = it->image; r->h = 0;
     return r;
+}
+
+/* the size an image is shown at: the declared size, else its own; never wider than maxw */
+static void image_size(const struct image *im, int maxw, int *w, int *h)
+{
+    int sw = im->surf ? im->surf->w : 0, sh = im->surf ? im->surf->h : 0, iw, ih;
+    if (im->dw > 0 && im->dh > 0) { iw = im->dw; ih = im->dh; }
+    else if (im->dw > 0) { iw = im->dw; ih = sw ? sh * iw / sw : iw * 3 / 4; }
+    else if (im->dh > 0) { ih = im->dh; iw = sh ? sw * ih / sh : ih * 4 / 3; }
+    else if (sw) { iw = sw; ih = sh; }
+    else { iw = MAX(40, gfx_ui_width(im->alt[0] ? im->alt : "image") + 16); ih = LINE_H; }     /* a box for the alt text */
+    if (iw > maxw) { ih = ih * maxw / iw; iw = maxw; }
+    *w = MAX(1, iw);
+    *h = MAX(1, ih);
 }
 
 static int field_w(const struct field *f, int width)
@@ -955,18 +1004,34 @@ static void layout(window_t *w)
     int x = 0, line = 0, space = gfx_ui_width(" ");
     bool first = true;                              /* nothing placed on this line yet */
     bool after_marker = false;
+    int extra = 0;                                  /* lines the tallest picture on this line takes beyond the first */
+#define NEWLINE(n) do { line += (n) + extra; extra = 0; } while (0)
     for (int i = 0; i < b->nitems; i++) {
         struct item *it = &b->items[i];
         int base = it->indent * INDENT_PX;          /* where lines of this block start */
-        if (it->type == IT_BREAK) { line++; first = true; continue; }
-        if (it->type == IT_PARA) { line += 2; first = true; continue; }
-        if (it->type == IT_RULE) { new_run(b, base, line, MAX(0, width - base), it); line++; first = true; continue; }
+        if (it->type == IT_BREAK) { NEWLINE(1); first = true; continue; }
+        if (it->type == IT_PARA) { NEWLINE(2); first = true; continue; }
+        if (it->type == IT_RULE) { new_run(b, base, line, MAX(0, width - base), it); NEWLINE(1); first = true; continue; }
         if (it->type == IT_GAP) { if (!first) x += 16; continue; }       /* between table cells */
+        if (it->type == IT_IMAGE) {
+            int iw, ih;
+            image_size(&b->images[it->image], MAX(40, width - base), &iw, &ih);
+            int igap = first ? 0 : space;
+            if (first) x = base;
+            else if (x + igap + iw > width) { NEWLINE(1); x = base; igap = 0; }
+            x += igap;
+            new_run(b, x, line, iw, it)->h = ih;
+            x += iw;
+            first = false;
+            after_marker = false;
+            extra = MAX(extra, (ih + LINE_H - 1) / LINE_H - 1);
+            continue;
+        }
         if (it->type == IT_INPUT) {
             int fw = field_w(&b->fields[it->field], width);
             int fgap = first ? 0 : space;
             if (first) x = base;
-            else if (x + fgap + fw > width) { line++; x = base; fgap = 0; }
+            else if (x + fgap + fw > width) { NEWLINE(1); x = base; fgap = 0; }
             x += fgap;
             new_run(b, x, line, fw, it);
             x += fw;
@@ -986,19 +1051,27 @@ static void layout(window_t *w)
             continue;
         }
         if (first) x = base;
-        else if (x + gap + ww > width) { line++; x = base; gap = 0; }
+        else if (x + gap + ww > width) { NEWLINE(1); x = base; gap = 0; }
         x += gap;
         new_run(b, x, line, ww, it);
         x += ww;
         first = false;
     }
     align_lines(b, width);
-    b->nlines = line + 1;
+    b->nlines = line + 1 + extra;
 }
 
 static int vis_lines(struct web *b) { return MAX(1, (b->content.h - 2 * MARGIN) / LINE_H); }
 
 /* ---------------------------------------------------------------- paint */
+static void draw_image(surface_t *s, struct web *b, const struct run *r, int x, int y)
+{
+    const struct image *im = &b->images[r->image];
+    if (im->surf) { gfx_blit_scaled(s, rect_make(x, y, r->w, r->h), im->surf); return; }
+    gfx_rect(s, x, y, r->w, r->h, RGB(170, 170, 180));          /* not loaded: the alt text in a box */
+    gfx_ui_text_ellipsis(s, x + 4, y + MAX(0, (r->h - 16) / 2), im->alt[0] ? im->alt : "image", r->w - 8, RGB(110, 110, 120));
+}
+
 static void draw_field(surface_t *s, struct web *b, const struct run *r, int x, int y)
 {
     const struct field *f = &b->fields[r->field];
@@ -1036,13 +1109,15 @@ static void paint(window_t *w)
     int first = b->scroll, last = b->scroll + vis_lines(b) + 1;
     for (int i = 0; i < b->nruns; i++) {
         struct run *r = &b->runs[i];
-        if (r->line < first || r->line > last) continue;
+        int nl = r->image >= 0 ? (r->h + LINE_H - 1) / LINE_H : 1;
+        if (r->line > last || r->line + nl <= first) continue;
         int x = c.x + MARGIN + r->x, y = c.y + MARGIN + (r->line - first) * LINE_H;
         if (r->style & ST_RULE) {                       /* <hr> */
             gfx_hline(s, x, y + 8, r->w, RGB(140, 140, 150));
             gfx_hline(s, x, y + 9, r->w, RGB(235, 235, 240));
             continue;
         }
+        if (r->image >= 0) { draw_image(s, b, r, x, y); continue; }
         if (r->field >= 0) { draw_field(s, b, r, x, y); continue; }
         char tmp[256];
         memcpy(tmp, b->text + r->off, r->len);
@@ -1312,6 +1387,12 @@ static int field_at(struct web *b, int x, int y)
 static int link_at(struct web *b, int x, int y)
 {
     rect_t c = b->content;
+    for (int i = 0; i < b->nruns; i++) {                  /* a picture that is a link */
+        struct run *r = &b->runs[i];
+        if (r->image < 0 || r->link < 0) continue;
+        int rx = c.x + MARGIN + r->x, ry = c.y + MARGIN + (r->line - b->scroll) * LINE_H;
+        if (x >= rx && x < rx + r->w && y >= ry && y < ry + r->h) return r->link;
+    }
     int line = b->scroll + (y - c.y - MARGIN) / LINE_H;
     for (int i = 0; i < b->nruns; i++) {
         struct run *r = &b->runs[i];
@@ -1325,7 +1406,7 @@ static int link_at(struct web *b, int x, int y)
     return -1;
 }
 
-static void poll_job(window_t *w)
+static void poll_page(window_t *w)
 {
     struct web *b = w->app;
     if (!b->job || !netjob_done(b->job)) return;
@@ -1336,7 +1417,6 @@ static void poll_job(window_t *w)
     netjob_fetch_result(b->job, &body, &len, &status, final_url, sizeof final_url, &err);
     netjob_release(b->job);
     b->job = NULL;
-    wm_set_timer(w, 0);
     if (err) {
         char page[512];
         snprintf(page, sizeof page, "<h1>Cannot open this page</h1><p>%s: %s.</p><p>Check the address and the network "
@@ -1359,6 +1439,57 @@ static void poll_job(window_t *w)
         kfree(body);
     }
     paint(w);
+}
+
+/* Pictures load one after another once the page has arrived; each one relays the page out. */
+static void poll_images(window_t *w)
+{
+    struct web *b = w->app;
+    if (b->job) return;
+    if (b->img_job) {
+        if (!netjob_done(b->img_job)) return;
+        char *body = NULL, fu[256];
+        u32 len = 0;
+        int status = 0, err = 0;
+        netjob_fetch_result(b->img_job, &body, &len, &status, fu, sizeof fu, &err);
+        netjob_release(b->img_job);
+        b->img_job = NULL;
+        struct image *im = &b->images[b->img_cur];
+        im->state = 3;
+        if (!err && status == 200 && body) {
+            surface_t *sf = img_decode((const u8 *)body, len);
+            if (sf) {
+                im->surf = sf;
+                im->state = 2;
+                b->laid_w = 0;
+                klog("[web ] image %d loaded %dx%d (%u bytes)\n", b->img_cur, sf->w, sf->h, len);
+            } else klog("[web ] image %d cannot be shown (%u bytes, not a supported picture)\n", b->img_cur, len);
+        } else klog("[web ] image %d failed: %s\n", b->img_cur, err ? net_strerror(err) : "no such picture");
+        kfree(body);
+        paint(w);
+    }
+    for (int i = 0; i < b->nimages && !b->img_job; i++) {
+        struct image *im = &b->images[i];
+        if (im->state != 0) continue;
+        char url[256];
+        resolve_link(b, im->src, url, sizeof url);
+        if (strncmp(url, "http://", 7) && strncmp(url, "https://", 8)) { im->state = 3; continue; }
+        b->img_job = netjob_fetch(url);
+        if (!b->img_job) { im->state = 3; continue; }
+        b->img_cur = i;
+        im->state = 1;
+        klog("[web ] loading image %d %s\n", i, url);
+    }
+}
+
+static void poll_job(window_t *w)
+{
+    struct web *b = w->app;
+    poll_page(w);
+    poll_images(w);
+    bool more = b->job || b->img_job;
+    for (int i = 0; i < b->nimages; i++) more |= b->images[i].state <= 1;
+    if (!more) wm_set_timer(w, 0);
 }
 
 static void scroll_by(window_t *w, int d)

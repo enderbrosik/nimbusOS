@@ -308,6 +308,8 @@ test-all: test $(IMG)
 	python3 tools/test_https.py
 	python3 tools/test_css.py
 	python3 tools/test_search.py
+	python3 tools/test_imgdec.py
+	python3 tools/test_images.py
 	python3 tools/test_update.py
 
 clean:
