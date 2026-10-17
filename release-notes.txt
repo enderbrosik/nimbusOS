@@ -1,3 +1,4 @@
+Nimbus Update: version numbers now read like decimals (3.2 is newer than 3.123, 3.121 newer than 3.12)
 File Explorer: a plugged-in USB stick shows up as the folder /USB (browse, rename, delete, copy and move files between it and the system disk)
 USB: USB sticks work (xHCI controller + mass storage); open one in the Terminal with the "fat" command
 FAT32: read and write FAT32 disks (USB-stick style, with long file names) from the Terminal with the "fat" command: info, ls, cat, get, put, mkdir, rm

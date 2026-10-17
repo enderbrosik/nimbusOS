@@ -13,6 +13,7 @@
  * (kernel/bootarea.c).
  */
 #include "kernel/update.h"
+#include "kernel/vercmp.h"
 #include "kernel/version.h"
 #include "kernel/bootarea.h"
 #include "kernel/settings.h"
@@ -104,20 +105,7 @@ static bool parse_hex(const char *s, u8 *out, int n)
 static bool pubkey(u8 out[32]) { return strlen(NIMBUS_UPDATE_PUBKEY) == 64 && parse_hex(NIMBUS_UPDATE_PUBKEY, out, 32); }
 bool update_signing_configured(void) { u8 k[32]; return pubkey(k); }
 
-/* "0.10.2" > "0.9" */
-static int version_cmp(const char *a, const char *b)
-{
-    for (int i = 0; i < 4; i++) {
-        int x = atoi(a), y = atoi(b);
-        if (x != y) return x < y ? -1 : 1;
-        while (*a && *a != '.') a++;
-        while (*b && *b != '.') b++;
-        if (*a) a++;
-        if (*b) b++;
-        if (!*a && !*b) break;
-    }
-    return 0;
-}
+static int version_cmp(const char *a, const char *b) { return nimbus_version_cmp(a, b); }
 
 struct update *update_new(update_say_fn fn, void *ctx)
 {
