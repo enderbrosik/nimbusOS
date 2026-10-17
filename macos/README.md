@@ -41,3 +41,25 @@ device (`/dev/diskNs1`), not the whole disk, for `nimbus.img`.
 
 Symbolic links, hard links, permissions and owners (NimbusFS does not store them), and two writers at once.
 Unmount before you boot the image in QEMU.
+
+## Ready-made Xcode project
+
+`macos/xcode/NimbusFS.xcodeproj` is the working project (app + `NimbusFSExtension`).
+Open it, pick your own Team under Signing & Capabilities for both targets, then run.
+
+Mounting, as tested on macOS 27 (M4):
+
+1. Run the app once from Xcode, then enable **NimbusFSExtension** in System Settings >
+   General > Login Items & Extensions > File System Extensions
+   (or `pluginkit -e use -i com.aaron.garsia.NimbusFS.NimbusFSExtension`).
+2. **Reboot** the first time. Until then `mount` may say
+   `No extension with fsShortName ... found` even though `pluginkit` lists it.
+   After a later rebuild, if that message comes back, reboot again.
+3. The extension's Info.plist needs `FSShortName` = `nimbusfs` and
+   `FSSupportsBlockResources` = `true`.
+4. Attach and mount (keep the image somewhere permanent; `/tmp` is cleared on reboot):
+
+       diskutil image attach --noMount ~/nimbus-test.img     # prints /dev/diskN, /dev/diskNs1 0x4E
+       mkdir -p ~/nimbus-mount
+       mount -F -t nimbusfs /dev/diskNs1 ~/nimbus-mount
+       umount ~/nimbus-mount && hdiutil detach /dev/diskN
