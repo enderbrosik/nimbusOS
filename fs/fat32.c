@@ -141,10 +141,22 @@ static u32 count_free(void)
 }
 
 /* ------------------------------------------------------------------ directories */
+/* FAT date and time words -> seconds since 1970 */
+static u32 dos_to_unix(u32 date, u32 time)
+{
+    int y = 1980 + (date >> 9), m = (date >> 5) & 15, d = date & 31;
+    if (m < 1 || m > 12 || d < 1) return 0;
+    int yy = m <= 2 ? y - 1 : y;
+    int era = yy / 400, yoe = yy - era * 400, doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    u32 days = (u32)(era * 146097 + doe - 719468);
+    return days * 86400 + ((time >> 11) & 31) * 3600 + ((time >> 5) & 63) * 60 + (time & 31) * 2;
+}
+
 struct dent {
     char name[FAT_NAME_MAX + 1];
     u8 sfn[11], attr;
-    u32 cluster, size;
+    u32 cluster, size, mtime;
     u32 first, idx;                 /* entry indexes: first LFN piece (or the entry itself) .. the short entry */
     bool lfn;
 };
@@ -237,6 +249,7 @@ static int dir_scan(u32 dir, int (*cb)(void *, struct dent *), void *ctx)
         d.attr = e[11];
         d.cluster = le16(e + 20) << 16 | le16(e + 26);
         d.size = le32(e + 28);
+        d.mtime = dos_to_unix(le16(e + 24), le16(e + 22));
         d.idx = n;
         d.first = n;
         if (lvalid && lsum == sfn_sum(e) && lname[0]) { strlcpy(d.name, lname, sizeof d.name); d.first = lfirst; d.lfn = true; }
@@ -482,6 +495,7 @@ static int list_cb(void *ctx, struct dent *d)
     strlcpy(it->name, d->name, sizeof it->name);
     it->dir = d->attr & ATTR_DIR;
     it->size = d->size;
+    it->mtime = d->mtime;
     return 0;
 }
 
@@ -636,6 +650,45 @@ int fat32_mkdir(const char *path)
 int fat32_remove(const char *path)
 {
     int r = fat32_remove_do(path);
+    fsinfo_flush();
+    return r;
+}
+
+static int fat32_rename_do(const char *from, const char *to)
+{
+    if (!V.mounted) return E_NOENT;
+    struct dent d; u32 dir;
+    int r = lookup(from, &d, &dir);
+    if (r) return r;
+    if (!d.first && !d.idx && d.cluster == V.rootclus) return E_INVAL;
+    char last[FAT_NAME_MAX + 1];
+    u32 ndir;
+    if ((r = walk(to, &ndir, last))) return r;
+    if (!last[0]) return E_INVAL;
+    struct dent x;
+    struct find f = { last, &x, false, NULL };
+    if ((r = dir_scan(ndir, find_cb, &f))) return r;
+    if (f.found) return x.idx == d.idx && ndir == dir ? 0 : E_EXIST;
+    if ((d.attr & ATTR_DIR) && ndir == d.cluster) return E_INVAL;
+    if ((r = add_entry(ndir, last, d.attr & ~0u, d.cluster, d.size))) return r;
+    u8 e[32];
+    for (u32 n = d.first; n <= d.idx; n++) {                 /* drop the old entries, keep the data */
+        if ((r = dir_get(dir, n, e))) return r;
+        e[0] = 0xE5;
+        if ((r = dir_put(dir, n, e))) return r;
+    }
+    if ((d.attr & ATTR_DIR) && ndir != dir) {                /* the folder's ".." now points at its new parent */
+        if ((r = dir_get(d.cluster, 1, e))) return r;
+        u32 par = ndir == V.rootclus ? 0 : ndir;
+        put16(e + 20, par >> 16); put16(e + 26, par);
+        r = dir_put(d.cluster, 1, e);
+    }
+    return r;
+}
+
+int fat32_rename(const char *from, const char *to)
+{
+    int r = fat32_rename_do(from, to);
     fsinfo_flush();
     return r;
 }

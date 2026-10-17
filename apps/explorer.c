@@ -15,6 +15,7 @@
 #include "gui/icons.h"
 #include "gui/theme.h"
 #include "fs/vfs.h"
+#include "fs/fat32.h"
 #include "drivers/pit.h"
 #include "kernel/heap.h"
 #include "kernel/string.h"
@@ -199,8 +200,14 @@ static void paint(window_t *w)
                  e->items[e->sel].type == NBFS_TYPE_DIR ? "" : ", ", e->items[e->sel].type == NBFS_TYPE_DIR ? "" : sz);
     } else {
         u32 total, freeb;
-        nbfs_statfs(ROOTFS, &total, &freeb);
-        snprintf(st, sizeof st, "%d items   |   %u MiB free on System Disk", e->n, freeb >> 20);
+        if (vfs_is_usb(e->path)) {
+            int drv;
+            fat32_info(&drv, &total, &freeb);
+            snprintf(st, sizeof st, "%d items   |   %u MiB free on USB Disk", e->n, freeb >> 10);
+        } else {
+            nbfs_statfs(ROOTFS, &total, &freeb);
+            snprintf(st, sizeof st, "%d items   |   %u MiB free on System Disk", e->n, freeb >> 20);
+        }
     }
     gfx_ui_text_ellipsis(s, 8, sy + 3, st, s->w - 16, C_TEXT);
     wm_invalidate(w);
@@ -271,7 +278,7 @@ static void rename_done(bool ok, const char *text, void *ctx)
     struct explorer *e = w->app;
     char np[NBFS_PATH_MAX];
     nbfs_path_join(e->path, text, np, sizeof np);
-    int r = nbfs_rename(ROOTFS, e->pending, np);
+    int r = vfs_rename(e->pending, np);
     if (r) {
         char m[160];
         snprintf(m, sizeof m, "Cannot rename \"%s\": %s.", nbfs_path_basename(e->pending), nbfs_strerror(r));
@@ -290,7 +297,7 @@ static void delete_done(int result, void *ctx)
     window_t *w = ctx;
     if (result != DLG_YES || !wm_window_alive(w)) return;
     struct explorer *e = w->app;
-    int r = nbfs_remove_tree(ROOTFS, e->pending);
+    int r = vfs_remove_tree(e->pending);
     if (r) {
         char m[160];
         snprintf(m, sizeof m, "Cannot delete: %s.", nbfs_strerror(r));

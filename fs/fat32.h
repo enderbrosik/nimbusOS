@@ -11,7 +11,7 @@
 struct fat_item {
     char name[FAT_NAME_MAX + 1];
     bool dir;
-    u32 size;
+    u32 size, mtime;                /* mtime: seconds since 1970 (0 if unknown) */
 };
 
 /* Mounts the first FAT32 volume found on an ATA drive that is not the boot disk
@@ -19,6 +19,7 @@ struct fat_item {
 int  fat32_mount(void);
 bool fat32_mounted(void);
 const char *fat32_label(void);
+int  fat32_rename(const char *from, const char *to);            /* same folder or another one on this volume */
 void fat32_info(int *drive, u32 *total_kib, u32 *free_kib);
 int  fat32_list(const char *path, struct fat_item **out);          /* *out is kmalloc'ed; returns count or an error */
 int  fat32_read(const char *path, char **out, u32 *len);           /* kmalloc'ed, NUL terminated */

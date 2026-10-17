@@ -7,6 +7,7 @@
  * needed beyond what the ATA driver does internally.
  */
 #include "fs/vfs.h"
+#include "fs/fat32.h"
 #include "drivers/ata.h"
 #include "drivers/rtc.h"
 #include "kernel/bootinfo.h"
@@ -177,8 +178,14 @@ bool vfs_init(void)
     return true;
 }
 
+/* The first plugged-in FAT32 disk (a USB stick) appears as the folder /USB. */
+bool vfs_is_usb(const char *p) { return !strncmp(p, "/USB", 4) && (p[4] == '/' || p[4] == 0); }
+static const char *usb_sub(const char *p) { return p[4] ? p + 4 : "/"; }
+static bool usb_ready(void) { return fat32_mounted() || fat32_mount() == 0; }
+
 int vfs_read_all(const char *path, char **out, u32 *len)
 {
+    if (vfs_is_usb(path)) { if (!usb_ready()) return NBFS_ENOENT; u32 n; int r = fat32_read(usb_sub(path), out, &n); if (!r && len) *len = n; return r; }
     struct nbfs_stat st;
     int r = nbfs_stat(ROOTFS, path, &st);
     if (r) return r;
@@ -195,18 +202,21 @@ int vfs_read_all(const char *path, char **out, u32 *len)
 
 int vfs_write_all(const char *path, const void *buf, u32 len)
 {
+    if (vfs_is_usb(path)) return usb_ready() ? fat32_write(usb_sub(path), buf, len) : NBFS_ENOENT;
     int r = nbfs_write_file(ROOTFS, path, buf, len);
     return r < 0 ? r : NBFS_OK;
 }
 
 bool vfs_exists(const char *path)
 {
+    if (vfs_is_usb(path)) { struct fat_item *it; if (!usb_ready()) return false; if (!usb_sub(path)[1]) return true; char par[NBFS_PATH_MAX]; nbfs_path_parent(usb_sub(path), par, sizeof par); int n = fat32_list(par, &it); for (int i = 0; i < n; i++) if (!strcasecmp(it[i].name, nbfs_path_basename(path))) { kfree(it); return true; } if (n > 0) kfree(it); return false; }
     u32 ino;
     return nbfs_lookup(ROOTFS, path, &ino) == NBFS_OK;
 }
 
 bool vfs_is_dir(const char *path)
 {
+    if (vfs_is_usb(path)) { struct fat_item *it; if (!usb_ready()) return false; if (!usb_sub(path)[1]) return true; int n = fat32_list(usb_sub(path), &it); if (n > 0) kfree(it); return n >= 0; }
     struct nbfs_stat st;
     return nbfs_stat(ROOTFS, path, &st) == NBFS_OK && st.type == NBFS_TYPE_DIR;
 }
@@ -219,6 +229,7 @@ int vfs_create_unique(const char *dir, const char *base, const char *ext, int ty
         else snprintf(name, sizeof name, "%s (%d)%s", base, i, ext);
         nbfs_path_join(dir, name, out, max);
         if (vfs_exists(out)) continue;
+        if (vfs_is_usb(out)) return type == NBFS_TYPE_DIR ? fat32_mkdir(usb_sub(out)) : fat32_write(usb_sub(out), "", 0);
         int r = nbfs_create(ROOTFS, out, type);
         return r < 0 ? r : NBFS_OK;
     }
@@ -245,8 +256,35 @@ static bool item_before(struct vfs_item *a, struct vfs_item *b)
     return strcasecmp(a->name, b->name) < 0;
 }
 
+static int usb_list(const char *path, struct vfs_item **out)
+{
+    if (!usb_ready()) return NBFS_ENOENT;
+    struct fat_item *fi;
+    int n = fat32_list(usb_sub(path), &fi);
+    if (n < 0) return n;
+    struct vfs_item *items = kmalloc((n ? n : 1) * sizeof *items);
+    if (!items) { kfree(fi); return NBFS_ENOSPC; }
+    for (int i = 0; i < n; i++) {
+        memset(&items[i], 0, sizeof items[i]);
+        strlcpy(items[i].name, fi[i].name, sizeof items[i].name);
+        items[i].type = fi[i].dir ? NBFS_TYPE_DIR : NBFS_TYPE_FILE;
+        items[i].size = fi[i].size;
+        items[i].mtime = items[i].ctime = fi[i].mtime;
+    }
+    if (n > 0) kfree(fi);
+    for (int i = 1; i < n; i++) {
+        struct vfs_item t = items[i];
+        int j = i - 1;
+        while (j >= 0 && item_before(&t, &items[j])) { items[j + 1] = items[j]; j--; }
+        items[j + 1] = t;
+    }
+    *out = items;
+    return n;
+}
+
 int vfs_list(const char *path, struct vfs_item **out)
 {
+    if (vfs_is_usb(path)) return usb_list(path, out);
     struct nbfs_stat st;
     int r = nbfs_stat(ROOTFS, path, &st);
     if (r) return r;
@@ -277,16 +315,51 @@ int vfs_list(const char *path, struct vfs_item **out)
         while (j >= 0 && item_before(&t, &items[j])) { items[j + 1] = items[j]; j--; }
         items[j + 1] = t;
     }
+    if (!strcmp(path, "/") && usb_ready()) {          /* the USB disk is listed as a folder in the root */
+        if (n == cap) items = krealloc(items, (cap + 1) * sizeof *items);
+        memset(&items[n], 0, sizeof items[n]);
+        strlcpy(items[n].name, "USB", sizeof items[n].name);
+        items[n].type = NBFS_TYPE_DIR;
+        items[n].mtime = items[n].ctime = rtc_unix_time();
+        n++;
+        for (int i = n - 1; i > 0 && item_before(&items[i], &items[i - 1]); i--) { struct vfs_item t = items[i]; items[i] = items[i - 1]; items[i - 1] = t; }
+    }
     *out = items;
     return r < 0 ? r : n;
 }
 
+int vfs_mkdir(const char *path) { return vfs_is_usb(path) ? (usb_ready() ? fat32_mkdir(usb_sub(path)) : NBFS_ENOENT) : nbfs_mkdir(ROOTFS, path); }
+
+int vfs_rename(const char *from, const char *to)
+{
+    if (vfs_is_usb(from) != vfs_is_usb(to)) return NBFS_EINVAL;
+    if (vfs_is_usb(from)) return usb_ready() ? fat32_rename(usb_sub(from), usb_sub(to)) : NBFS_ENOENT;
+    return nbfs_rename(ROOTFS, from, to);
+}
+
+int vfs_remove_tree(const char *path)
+{
+    if (!vfs_is_usb(path)) return nbfs_remove_tree(ROOTFS, path);
+    if (!usb_ready()) return NBFS_ENOENT;
+    if (vfs_is_dir(path)) {
+        struct vfs_item *items;
+        int n = usb_list(path, &items), r = 0;
+        for (int i = 0; i < n && !r; i++) {
+            char c[NBFS_PATH_MAX];
+            nbfs_path_join(path, items[i].name, c, sizeof c);
+            r = vfs_remove_tree(c);
+        }
+        if (n > 0) kfree(items);
+        if (r) return r;
+    }
+    return fat32_remove(usb_sub(path));
+}
+
 int vfs_copy_tree(const char *src, const char *dst)
 {
-    struct nbfs_stat st;
-    int r = nbfs_stat(ROOTFS, src, &st);
-    if (r) return r;
-    if (st.type == NBFS_TYPE_FILE) {
+    if (!vfs_exists(src)) return NBFS_ENOENT;
+    int r;
+    if (!vfs_is_dir(src)) {
         char *data;
         u32 len;
         r = vfs_read_all(src, &data, &len);
@@ -295,7 +368,7 @@ int vfs_copy_tree(const char *src, const char *dst)
         kfree(data);
         return r;
     }
-    r = nbfs_mkdir(ROOTFS, dst);
+    r = vfs_mkdir(dst);
     if (r) return r;
     struct vfs_item *items;
     int n = vfs_list(src, &items);
@@ -330,7 +403,12 @@ int vfs_move_into(const char *src, const char *dir, bool copy, char *out, int ma
             nbfs_path_join(dir, nn, dst, sizeof dst);
         }
     }
-    int r = copy ? vfs_copy_tree(src, dst) : nbfs_rename(ROOTFS, src, dst);
+    int r;
+    if (copy) r = vfs_copy_tree(src, dst);
+    else if (vfs_is_usb(src) != vfs_is_usb(dst)) {          /* moving between the system disk and the USB disk: copy, then delete */
+        r = vfs_copy_tree(src, dst);
+        if (!r) r = vfs_remove_tree(src);
+    } else r = vfs_rename(src, dst);
     if (!r) strlcpy(out, dst, max);
     return r;
 }

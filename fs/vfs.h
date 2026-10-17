@@ -47,5 +47,9 @@ int  vfs_copy_tree(const char *src, const char *dst);
 /* Move (or copy) src into directory dir, keeping its name.  A copy into the
  * same folder gets a unique "name (2)" style name.  out receives the new path. */
 int  vfs_move_into(const char *src, const char *dir, bool copy, char *out, int max);
+bool vfs_is_usb(const char *path);           /* "/USB" and below: the plugged-in FAT32 disk */
+int  vfs_mkdir(const char *path);
+int  vfs_rename(const char *from, const char *to);
+int  vfs_remove_tree(const char *path);
 void vfs_format_time(u32 t, char *out, int max);
 #endif
