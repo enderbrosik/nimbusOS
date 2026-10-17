@@ -188,10 +188,16 @@ deploy: release
 	cd $(RELEASE_OUT) && vercel deploy --prod
 	@echo "Done. On NimbusOS, point the updater at your project's URL once: update url https://<project>.vercel.app"
 
-test: $(BUILD)/tools/fstest $(BUILD)/tools/cryptotest
+# Calculator arithmetic (apps/calc_math.h) on the host.
+$(BUILD)/tools/calcmath: tools/calcmath.c apps/calc_math.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) tools/calcmath.c -o $@
+
+test: $(BUILD)/tools/fstest $(BUILD)/tools/cryptotest $(BUILD)/tools/calcmath
 	@mkdir -p $(BUILD)/test
 	$(BUILD)/tools/fstest
 	$(BUILD)/tools/cryptotest
+	$(BUILD)/tools/calcmath
 
 NFSTOOL := $(BUILD)/tools/nfstool
 MKWALL  := $(BUILD)/tools/mkwallpaper

@@ -116,7 +116,7 @@ fs/            nbfs.[ch] NimbusFS (shared with host tools), vfs.[ch] volume glue
 gui/           gfx (primitives + font), wm (compositor/window manager), desktop, taskbar, menu, widgets,
                dialogs (message/input/file), icons, cursor, BMP codec, clipboard
 apps/          explorer, notepad, paint, terminal, taskmgr, sysprops, settings, minesweeper, snake,
-               solitaire, mediaplayer, web browser, app registry
+               solitaire, mediaplayer, web browser, calculator (+ calc_math.h arithmetic), app registry
 net/           TCP/IP stack (net.c), TLS 1.3 client (tls.c), crypto (crypto.c), random pool (rng.c),
                background network jobs (netjob.c)
 installer/     graphical installer
