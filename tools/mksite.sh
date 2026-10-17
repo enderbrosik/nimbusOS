@@ -10,6 +10,7 @@ mkdir -p "$OUT"
 cp -R "$UPD"/. "$OUT"/
 rm -rf "$OUT/.vercel"
 cp "$HERE/web/icon.svg" "$OUT/icon.svg"
+{ printf 'NimbusOS %s\n\n' "$VERSION"; grep -v '^#' "$NOTES_FILE" | sed 's/^/- /'; } > "$OUT/release-notes.txt"
 NOTES=$(grep -v '^#' "$NOTES_FILE" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/^/<li>/; s/$/<\/li>/' | tr -d '\n')
 NOTES=$(printf '%s' "$NOTES" | sed 's/[&|\\]/\\&/g')       # escape for the sed replacement below
 DATE=$(date -u +%Y-%m-%d)

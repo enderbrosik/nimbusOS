@@ -159,7 +159,7 @@ int main(int argc, char **argv)
     fclose(f);
     snprintf(path, sizeof path, "%s/vercel.json", out_dir);
     f = fopen(path, "w");
-    fprintf(f, "{\n  \"headers\": [\n    { \"source\": \"/manifest(.*)\", \"headers\": [ { \"key\": \"Cache-Control\", \"value\": \"no-cache\" } ] }\n  ]\n}\n");
+    fprintf(f, "{\n  \"headers\": [\n    { \"source\": \"/(manifest|release-notes)(.*)\", \"headers\": [ { \"key\": \"Cache-Control\", \"value\": \"no-cache\" } ] }\n  ]\n}\n");
     fclose(f);
     snprintf(path, sizeof path, "%s/index.html", out_dir);
     f = fopen(path, "w");
