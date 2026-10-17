@@ -16,5 +16,6 @@ void netjob_release(struct netjob *j);       /* caller is finished with the job 
 
 /* Generic HTTP fetch for apps (the Web browser) */
 struct netjob *netjob_fetch(const char *url);
+struct netjob *netjob_fetch_post(const char *url, const char *body);      /* form POST */
 bool netjob_fetch_result(struct netjob *j, char **body, u32 *len, int *status, char *final_url, int urlmax, int *err);
 #endif

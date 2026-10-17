@@ -926,6 +926,11 @@ static void resolve_location(const char *loc, bool tls, const char *host, u16 po
 
 int http_get(const char *url_in, char **body, u32 *blen, int *status, char *final_url, int urlmax)
 {
+    return http_request(url_in, NULL, body, blen, status, final_url, urlmax);
+}
+
+int http_request(const char *url_in, const char *post, char **body, u32 *blen, int *status, char *final_url, int urlmax)
+{
     char url[512];
     strlcpy(url, url_in, sizeof url);
     last_tls_info[0] = 0;
@@ -941,12 +946,13 @@ int http_get(const char *url_in, char **body, u32 *blen, int *status, char *fina
         struct conn c;
         r = conn_open(&c, ip, port, use_tls, host);
         if (r) return r;
-        char req[1024];
+        char req[1024], extra[96] = "";
+        if (post) snprintf(extra, sizeof extra, "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %u\r\n", (u32)strlen(post));
         int n = snprintf(req, sizeof req,
-            "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (compatible; NimbusOS/" NIMBUS_VERSION "; text browser)\r\n"
-            "Accept: text/html, text/plain, */*\r\nAccept-Language: en-US,en;q=0.8\r\n"
-            "Accept-Encoding: identity\r\nConnection: close\r\n\r\n", path, host);
-        if (conn_send(&c, req, n) < 0) { conn_close(&c); return NET_ERESET; }
+            "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (compatible; NimbusOS/" NIMBUS_VERSION "; text browser)\r\n"
+            "Accept: text/html, text/plain, */*\r\nAccept-Language: en-US,en;q=0.8\r\n%s"
+            "Accept-Encoding: identity\r\nConnection: close\r\n\r\n", post ? "POST" : "GET", path, host, extra);
+        if (conn_send(&c, req, n) < 0 || (post && conn_send(&c, post, strlen(post)) < 0)) { conn_close(&c); return NET_ERESET; }
         u32 cap = 16384, len = 0;
         char *buf = kmalloc(cap + 1);
         if (!buf) { conn_close(&c); return NET_ENOMEM; }
@@ -980,6 +986,7 @@ int http_get(const char *url_in, char **body, u32 *blen, int *status, char *fina
                 resolve_location(loc, use_tls, host, port, path, next, sizeof next);
                 klog("[http] %d redirect to %s\n", code, next);
                 strlcpy(url, next, sizeof url);
+                post = NULL;                                    /* the redirect target is fetched with GET */
                 kfree(buf);
                 continue;
             }

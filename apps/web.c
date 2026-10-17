@@ -31,15 +31,20 @@
 #define SEARCH_URL "https://html.duckduckgo.com/html/?q="
 
 enum { ST_NORMAL = 0, ST_BOLD = 1, ST_HEADING = 2, ST_PRE = 4, ST_UNDERLINE = 8, ST_COLOR = 16, ST_ITALIC = 32, ST_MARKER = 64, ST_RULE = 128 };
-enum { IT_WORD, IT_BREAK, IT_PARA, IT_RULE, IT_GAP };
+enum { IT_WORD, IT_BREAK, IT_PARA, IT_RULE, IT_GAP, IT_INPUT };
 #define INDENT_PX 24                /* one level of list or blockquote indentation */
 
 /* the computed style of an element (inherited by its children) */
 struct cstyle { u8 bold, large, pre, underline, align, hidden, colored, italic, indent, marker; u32 color; };
 struct css_rule { char sel[48]; u8 spec; u32 off, len; };     /* declarations are in web.css */
 
-struct item { u8 type, style, align, glue, indent; i16 link; u32 off, len, color; };
-struct run { int x, line, w; u32 off, len, color; u8 style, align; i16 link; };
+struct item { u8 type, style, align, glue, indent; i16 link, field; u32 off, len, color; };
+struct run { int x, line, w; u32 off, len, color; u8 style, align; i16 link, field; };
+
+/* form controls */
+enum { FK_TEXT, FK_PASSWORD, FK_HIDDEN, FK_SUBMIT, FK_CHECK, FK_RADIO };
+struct field { char name[40], value[160]; textfield_t tf; u8 kind, checked, form, size; };   /* form 255: not in a form */
+struct form { char action[200]; u8 post; };
 
 struct web {
     textfield_t addr;
@@ -52,6 +57,9 @@ struct web {
     char *links[MAXLINKS]; int nlinks;
     struct css_rule *rules; int nrules, rrcap;
     char *css; u32 csslen, csscap;          /* the declarations of the rules */
+    struct field *fields; int nfields, fcap;
+    int focus;                              /* the field being edited, or -1 */
+    struct form forms[8]; int nforms;
     /* layout */
     struct run *runs; int nruns, rcap, nlines, laid_w;
     int scroll;                 /* in lines */
@@ -66,6 +74,9 @@ static void doc_clear(struct web *b)
 {
     b->tlen = 0;
     b->nitems = 0;
+    b->nfields = 0;
+    b->nforms = 0;
+    b->focus = -1;
     for (int i = 0; i < b->nlinks; i++) kfree(b->links[i]);
     b->nlinks = 0;
     b->nrules = 0;
@@ -97,7 +108,7 @@ static void add_item(struct web *b, int type, const struct cstyle *c, int link, 
     if (len && b->tlen + len + 1 > b->tcap) { b->tcap = (b->tlen + len + 1) * 2; b->text = krealloc(b->text, b->tcap); }
     struct item *it = &b->items[b->nitems++];
     it->type = (u8)type; it->style = style; it->align = c->align; it->glue = glue; it->indent = c->indent; it->link = (i16)link;
-    it->color = c->color; it->off = b->tlen; it->len = len;
+    it->color = c->color; it->off = b->tlen; it->len = len; it->field = -1;
     if (len) { memcpy(b->text + b->tlen, s, len); b->tlen += len; }
 }
 
@@ -581,6 +592,38 @@ static void unescape_attr(char *s)
     *o = 0;
 }
 
+/* The value of one attribute of a tag (between q and e); false if it is missing. */
+static bool get_attr(const char *q, const char *e, const char *want, char *out, int max)
+{
+    const char *p = q;
+    out[0] = 0;
+    while (p < e) {
+        while (p < e && (isspace((u8)*p) || *p == '/')) p++;
+        const char *ns = p;
+        while (p < e && (isalnum((u8)*p) || *p == '-' || *p == '_')) p++;
+        int nl = p - ns;
+        p = skip_space(p, e);
+        char val[256];
+        int vl = 0;
+        if (p < e && *p == '=') {
+            p = skip_space(p + 1, e);
+            char quote = (p < e && (*p == '"' || *p == '\'')) ? *p++ : 0;
+            while (p < e && vl < 255 && (quote ? *p != quote : !isspace((u8)*p))) val[vl++] = *p++;
+            if (quote && p < e && *p == quote) p++;
+        }
+        val[vl] = 0;
+        if (nl == 0) { p++; continue; }
+        if (ci_equal(ns, nl, want)) {
+            int n = vl < max - 1 ? vl : max - 1;
+            memcpy(out, val, n);
+            out[n] = 0;
+            unescape_attr(out);
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Attributes of a tag (between q and e): href, class, id and style are kept. */
 static void tag_attrs(const char *q, const char *e, char *href, char *cls, char *idv, char *inl)
 {
@@ -636,6 +679,43 @@ static void element_style(struct web *b, struct cstyle *c, const char *tag, cons
     if (inl[0]) apply_decls(c, inl, strlen(inl));
 }
 
+/* An <input>: text boxes, passwords, buttons, check boxes and radio buttons are drawn; hidden
+ * ones are kept for submitting.  Other types (file, image, ...) are ignored. */
+static void add_input(struct web *b, const struct cstyle *c, int form, const char *q, const char *e)
+{
+    char type[16] = "text", name[40] = "", val[160] = "", size[8] = "", tmp[4];
+    get_attr(q, e, "type", type, sizeof type);
+    get_attr(q, e, "name", name, sizeof name);
+    get_attr(q, e, "value", val, sizeof val);
+    get_attr(q, e, "size", size, sizeof size);
+    bool checked = get_attr(q, e, "checked", tmp, sizeof tmp);
+    int kind;
+    if (!strcasecmp(type, "hidden")) kind = FK_HIDDEN;
+    else if (!strcasecmp(type, "submit")) kind = FK_SUBMIT;
+    else if (!strcasecmp(type, "checkbox")) kind = FK_CHECK;
+    else if (!strcasecmp(type, "radio")) kind = FK_RADIO;
+    else if (!strcasecmp(type, "password")) kind = FK_PASSWORD;
+    else if (!strcasecmp(type, "text") || !strcasecmp(type, "search") || !strcasecmp(type, "email") ||
+             !strcasecmp(type, "url") || !strcasecmp(type, "tel") || !strcasecmp(type, "number")) kind = FK_TEXT;
+    else return;
+    if (b->nfields == b->fcap) { b->fcap = b->fcap ? b->fcap * 2 : 16; b->fields = krealloc(b->fields, b->fcap * sizeof *b->fields); }
+    struct field *f = &b->fields[b->nfields];
+    memset(f, 0, sizeof *f);
+    f->kind = (u8)kind;
+    f->form = form < 0 ? 255 : (u8)form;
+    f->checked = checked;
+    int sz = atoi(size);
+    f->size = (u8)(sz > 0 && sz < 80 ? sz : 20);
+    strlcpy(f->name, name, sizeof f->name);
+    strlcpy(f->value, val, sizeof f->value);
+    if (kind == FK_TEXT || kind == FK_PASSWORD) tf_set(&f->tf, val);
+    int idx = b->nfields++;
+    if (kind != FK_HIDDEN) {
+        add_item(b, IT_INPUT, c, -1, NULL, 0, false);
+        b->items[b->nitems - 1].field = (i16)idx;
+    }
+}
+
 static bool block_tag(const char *t)
 {
     static const char *names[] = { "p", "div", "ul", "ol", "li", "table", "tr", "td", "th", "section", "article", "header",
@@ -663,6 +743,7 @@ static void parse_html(struct web *b, const char *h, bool plain)
     if (!plain) collect_css(b, h);
     int link = -1, skip = 0;               /* skip > 0 while inside script/noscript */
     int olcount[MAXDEPTH];                 /* the last number used by each open <ol> */
+    int cur_form = -1;                     /* the <form> being read */
     memset(olcount, 0, sizeof olcount);
     char word[256];
     int wl = 0;
@@ -725,6 +806,7 @@ static void parse_html(struct web *b, const char *h, bool plain)
                     else if (!strcmp(tag, "ul") || !strcmp(tag, "ol"))      /* a gap after a list; a nested list just ends the line */
                         add_item(b, depth > 0 && !strcmp(stag[depth - 1], "li") ? IT_BREAK : IT_PARA, cur, -1, NULL, 0, false);
                     if (!strcmp(tag, "a")) link = -1;
+                    if (!strcmp(tag, "form")) cur_form = -1;
                     if ((!strcmp(tag, "td") || !strcmp(tag, "th")) && !cur->hidden) add_item(b, IT_GAP, cur, -1, NULL, 0, false);
                 }
                 if (!strcmp(tag, "a") && i < 0) link = -1;
@@ -755,6 +837,19 @@ static void parse_html(struct web *b, const char *h, bool plain)
                         if (!at_line_start) add_item(b, IT_BREAK, cur, -1, NULL, 0, false);
                         add_item(b, IT_WORD, &m, -1, mk, strlen(mk), false);
                     }
+                }
+                if (!hidden && !strcmp(tag, "form")) {
+                    char act[200] = "", method[8] = "";
+                    get_attr(q, e, "action", act, sizeof act);
+                    get_attr(q, e, "method", method, sizeof method);
+                    if (b->nforms < 8) {
+                        struct form *f = &b->forms[b->nforms];
+                        strlcpy(f->action, act, sizeof f->action);
+                        f->post = !strcasecmp(method, "post");
+                        cur_form = b->nforms++;
+                    } else cur_form = -1;
+                } else if (!hidden && !strcmp(tag, "input")) {
+                    add_input(b, cur, cur_form, q, e);
                 }
                 if (!void_tag(tag) && depth < MAXDEPTH) {
                     stack[depth] = *cur;
@@ -839,8 +934,15 @@ static struct run *new_run(struct web *b, int x, int line, int w, const struct i
     struct run *r = &b->runs[b->nruns++];
     r->x = x; r->line = line; r->w = w;
     r->off = it->off; r->len = it->len; r->style = it->style; r->align = it->align;
-    r->link = it->link; r->color = it->color;
+    r->link = it->link; r->color = it->color; r->field = it->field;
     return r;
+}
+
+static int field_w(const struct field *f, int width)
+{
+    if (f->kind == FK_SUBMIT) return gfx_ui_width(f->value[0] ? f->value : "Submit") + 24;
+    if (f->kind == FK_CHECK || f->kind == FK_RADIO) return 18;
+    return MAX(100, MIN(f->size * 8 + 8, width));
 }
 
 static void layout(window_t *w)
@@ -860,6 +962,18 @@ static void layout(window_t *w)
         if (it->type == IT_PARA) { line += 2; first = true; continue; }
         if (it->type == IT_RULE) { new_run(b, base, line, MAX(0, width - base), it); line++; first = true; continue; }
         if (it->type == IT_GAP) { if (!first) x += 16; continue; }       /* between table cells */
+        if (it->type == IT_INPUT) {
+            int fw = field_w(&b->fields[it->field], width);
+            int fgap = first ? 0 : space;
+            if (first) x = base;
+            else if (x + fgap + fw > width) { line++; x = base; fgap = 0; }
+            x += fgap;
+            new_run(b, x, line, fw, it);
+            x += fw;
+            first = false;
+            after_marker = false;
+            continue;
+        }
         int ww = word_w(b, it);
         int gap = first ? 0 : (it->glue && !after_marker ? 0 : space);
         after_marker = false;
@@ -885,6 +999,24 @@ static void layout(window_t *w)
 static int vis_lines(struct web *b) { return MAX(1, (b->content.h - 2 * MARGIN) / LINE_H); }
 
 /* ---------------------------------------------------------------- paint */
+static void draw_field(surface_t *s, struct web *b, const struct run *r, int x, int y)
+{
+    const struct field *f = &b->fields[r->field];
+    rect_t fr = rect_make(x, y - 2, r->w, 21);
+    switch (f->kind) {
+    case FK_SUBMIT: ui_button(s, fr, f->value[0] ? f->value : "Submit", BTN_NORMAL); break;
+    case FK_CHECK: ui_checkbox(s, fr.x, fr.y + 3, f->checked, ""); break;
+    case FK_RADIO: ui_radio(s, fr.x, fr.y + 3, f->checked, ""); break;
+    case FK_PASSWORD: {
+        textfield_t t = f->tf;
+        for (int i = 0; i < t.len; i++) t.text[i] = '*';
+        tf_draw(s, fr, &t, b->focus == r->field);
+        break;
+    }
+    default: tf_draw(s, fr, (textfield_t *)&f->tf, b->focus == r->field);
+    }
+}
+
 static void paint(window_t *w)
 {
     struct web *b = w->app;
@@ -911,6 +1043,7 @@ static void paint(window_t *w)
             gfx_hline(s, x, y + 9, r->w, RGB(235, 235, 240));
             continue;
         }
+        if (r->field >= 0) { draw_field(s, b, r, x, y); continue; }
         char tmp[256];
         memcpy(tmp, b->text + r->off, r->len);
         tmp[r->len] = 0;
@@ -1052,7 +1185,7 @@ static void normalize_path(char *url, int max)
     strlcat(url, tail, max);
 }
 
-static void navigate(window_t *w, const char *url, bool push)
+static void navigate_ex(window_t *w, const char *url, const char *post, bool push)
 {
     struct web *b = w->app;
     char u[256];
@@ -1079,12 +1212,14 @@ static void navigate(window_t *w, const char *url, bool push)
         return;
     }
     if (b->job) { netjob_cancel(b->job); netjob_release(b->job); }
-    b->job = netjob_fetch(u);
+    b->job = post ? netjob_fetch_post(u, post) : netjob_fetch(u);
     snprintf(b->status, sizeof b->status, "Loading %s ...", u);
     klog("[web ] loading %s\n", u);
     wm_set_timer(w, 50);
     paint(w);
 }
+
+static void navigate(window_t *w, const char *url, bool push) { navigate_ex(w, url, NULL, push); }
 
 static void resolve_raw(struct web *b, const char *href, char *out, int max)
 {
@@ -1114,6 +1249,64 @@ static void resolve_link(struct web *b, const char *href, char *out, int max)
     if (frag) *frag = 0;
     normalize_path(out, max);
     unwrap_redirect(out, max);
+}
+
+/* Sends a form: GET puts the fields in the URL's query, POST in the body.  submit_field is the
+ * button that was clicked (its name=value is included), or -1 when Enter was pressed. */
+static void form_submit(window_t *w, int form, int submit_field)
+{
+    struct web *b = w->app;
+    if (form < 0 || form >= b->nforms) return;
+    char q[768];
+    q[0] = 0;
+    for (int i = 0; i < b->nfields; i++) {
+        struct field *f = &b->fields[i];
+        if (f->form != form || !f->name[0]) continue;
+        const char *val = NULL;
+        if (f->kind == FK_TEXT || f->kind == FK_PASSWORD) val = f->tf.text;
+        else if (f->kind == FK_HIDDEN) val = f->value;
+        else if (f->kind == FK_CHECK || f->kind == FK_RADIO) { if (f->checked) val = f->value[0] ? f->value : "on"; }
+        else if (f->kind == FK_SUBMIT && i == submit_field) val = f->value;
+        if (!val) continue;
+        char n[120], v[400];
+        url_encode(f->name, n, sizeof n);
+        url_encode(val, v, sizeof v);
+        if (strlen(q) + strlen(n) + strlen(v) + 3 >= sizeof q) break;
+        if (q[0]) strlcat(q, "&", sizeof q);
+        strlcat(q, n, sizeof q);
+        strlcat(q, "=", sizeof q);
+        strlcat(q, v, sizeof q);
+    }
+    struct form *fm = &b->forms[form];
+    char url[256];
+    if (fm->action[0]) resolve_link(b, fm->action, url, sizeof url);
+    else strlcpy(url, b->url, sizeof url);
+    if (fm->post) {
+        klog("[web ] submit form POST %s\n", url);
+        navigate_ex(w, url, q, true);
+        return;
+    }
+    char *qm = strchr(url, '?');
+    if (qm) *qm = 0;
+    if ((int)strlen(q) + 2 < (int)sizeof url - (int)strlen(url)) { strlcat(url, "?", sizeof url); strlcat(url, q, sizeof url); }
+    klog("[web ] submit form GET %s\n", url);
+    navigate_ex(w, url, NULL, true);
+}
+
+static int c_x(struct web *b, const struct run *r) { return b->content.x + MARGIN + r->x; }
+static int c_y(struct web *b, const struct run *r) { return b->content.y + MARGIN + (r->line - b->scroll) * LINE_H - 2; }
+
+/* the run of the form control under (x, y), or -1 */
+static int field_at(struct web *b, int x, int y)
+{
+    rect_t c = b->content;
+    for (int i = 0; i < b->nruns; i++) {
+        struct run *r = &b->runs[i];
+        if (r->field < 0) continue;
+        int rx = c.x + MARGIN + r->x, ry = c.y + MARGIN + (r->line - b->scroll) * LINE_H - 2;
+        if (x >= rx && x < rx + r->w && y >= ry && y < ry + 21) return i;
+    }
+    return -1;
 }
 
 static int link_at(struct web *b, int x, int y)
@@ -1189,7 +1382,7 @@ static void on_event(window_t *w, event_t *e)
     }
     case EV_MOUSE_DOWN:
         b->addr_focus = rect_contains(rect_make(42, 5, w->surface->w - 98, 26), e->x, e->y);
-        if (b->addr_focus) tf_click(&b->addr, rect_make(42, 5, w->surface->w - 98, 26), e->x);
+        if (b->addr_focus) { tf_click(&b->addr, rect_make(42, 5, w->surface->w - 98, 26), e->x); b->focus = -1; }
         if (rect_contains(b->b_go, e->x, e->y)) { navigate(w, b->addr.text, true); break; }
         if (rect_contains(b->b_back, e->x, e->y) && b->nhist) { char u[256]; strlcpy(u, b->history[--b->nhist], sizeof u); navigate(w, u, false); break; }
         if (rect_contains(rect_make(b->content.x + b->content.w - 16, b->content.y, 16, b->content.h), e->x, e->y)) {
@@ -1198,6 +1391,28 @@ static void on_event(window_t *w, event_t *e)
             break;
         }
         if (rect_contains(b->content, e->x, e->y)) {
+            int ri = field_at(b, e->x, e->y);
+            if (ri >= 0) {                               /* a form control */
+                struct run *r = &b->runs[ri];
+                struct field *f = &b->fields[r->field];
+                b->addr_focus = false;
+                if (f->kind == FK_TEXT || f->kind == FK_PASSWORD) {
+                    b->focus = r->field;
+                    tf_click(&f->tf, rect_make(c_x(b, r), c_y(b, r), r->w, 21), e->x);
+                } else {
+                    b->focus = -1;
+                    if (f->kind == FK_SUBMIT) { form_submit(w, f->form == 255 ? -1 : f->form, r->field); break; }
+                    if (f->kind == FK_CHECK) f->checked = !f->checked;
+                    else if (f->kind == FK_RADIO) {
+                        for (int i = 0; i < b->nfields; i++)
+                            if (b->fields[i].kind == FK_RADIO && b->fields[i].form == f->form && !strcmp(b->fields[i].name, f->name)) b->fields[i].checked = 0;
+                        f->checked = 1;
+                    }
+                }
+                paint(w);
+                break;
+            }
+            b->focus = -1;
             int l = link_at(b, e->x, e->y);
             if (l >= 0) {
                 char u[256];
@@ -1212,6 +1427,13 @@ static void on_event(window_t *w, event_t *e)
     case EV_KEY: {
         struct key_event *k = &e->key;
         if (!k->pressed) break;
+        if (!b->addr_focus && b->focus >= 0 && b->focus < b->nfields) {      /* typing into a form field */
+            struct field *f = &b->fields[b->focus];
+            if (k->key == KEY_ENTER) { form_submit(w, f->form == 255 ? -1 : f->form, -1); break; }
+            if (k->key == KEY_ESC) { b->focus = -1; paint(w); break; }
+            if (tf_key(&f->tf, k)) paint(w);
+            break;
+        }
         if (b->addr_focus) {
             if (k->key == KEY_ENTER) { b->addr_focus = false; navigate(w, b->addr.text, true); break; }
             if (k->key == KEY_ESC) { b->addr_focus = false; paint(w); break; }
@@ -1232,7 +1454,7 @@ static void on_event(window_t *w, event_t *e)
     case EV_DESTROY:
         if (b->job) { netjob_cancel(b->job); netjob_release(b->job); }
         doc_clear(b);
-        kfree(b->text); kfree(b->items); kfree(b->runs); kfree(b->rules); kfree(b->css); kfree(b);
+        kfree(b->text); kfree(b->items); kfree(b->runs); kfree(b->rules); kfree(b->css); kfree(b->fields); kfree(b);
         break;
     }
 }
@@ -1242,6 +1464,7 @@ void web_open(const char *url)
     struct web *b = kzalloc(sizeof *b);
     if (!b) return;
     b->hover_link = -1;
+    b->focus = -1;
     window_t *w = wm_create("Web Browser", ICON_WEB, 760, 520, WF_RESIZABLE, on_event, b);
     if (!w) { kfree(b); return; }
     w->min_w = 360;

@@ -31,6 +31,7 @@ struct netjob {
     int status, error;
     char name[64], final_url[256];
     bool is_fetch;
+    char *post;                      /* POST body of a fetch, or NULL */
 };
 
 static void say(struct netjob *j, bool error, const char *fmt, ...)
@@ -56,6 +57,7 @@ static void free_job(struct netjob *j)
 {
     while (j->qn) { kfree(j->lines[j->qh]); j->qh = (j->qh + 1) % QN; j->qn--; }
     kfree(j->body);
+    kfree(j->post);
     kfree(j);
 }
 
@@ -193,7 +195,7 @@ static void job_main(void *arg)
 {
     struct netjob *j = arg;
     if (j->is_fetch) {
-        j->error = http_get(j->args[0], &j->body, &j->len, &j->status, j->final_url, sizeof j->final_url);
+        j->error = http_request(j->args[0], j->post, &j->body, &j->len, &j->status, j->final_url, sizeof j->final_url);
         finish(j);
         return;
     }
@@ -231,6 +233,19 @@ struct netjob *netjob_fetch(const char *url)
     if (!j) return NULL;
     j->is_fetch = true;
     strlcpy(j->args[0], url, sizeof j->args[0]);
+    task_create("fetch", job_main, j);
+    return j;
+}
+
+struct netjob *netjob_fetch_post(const char *url, const char *body)
+{
+    struct netjob *j = kzalloc(sizeof *j);
+    if (!j) return NULL;
+    j->is_fetch = true;
+    strlcpy(j->args[0], url, sizeof j->args[0]);
+    j->post = kmalloc(strlen(body) + 1);
+    if (!j->post) { kfree(j); return NULL; }
+    strcpy(j->post, body);
     task_create("fetch", job_main, j);
     return j;
 }

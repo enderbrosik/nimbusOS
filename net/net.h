@@ -45,4 +45,6 @@ void tcp_close(int s);
 const char *net_tls_error(void);            /* detail for NET_ETLS */
 const char *http_last_security(void);       /* cipher of the last https request, "" for http */
 int  http_get(const char *url, char **body, u32 *len, int *status, char *final_url, int urlmax);
+/* Like http_get; with a non-NULL post body it sends a form POST (a redirect answer is followed with GET). */
+int  http_request(const char *url, const char *post, char **body, u32 *len, int *status, char *final_url, int urlmax);
 #endif

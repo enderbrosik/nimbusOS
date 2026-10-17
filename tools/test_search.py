@@ -39,30 +39,41 @@ TARGET_QUERY = "x=1&y=2"
 def wrapped(target):
     return "//duckduckgo.com/l/?uddg=" + urllib.parse.quote(target, safe="") + "&amp;rut=0123456789abcdef"
 
-seen = {"requests": [], "agents": []}
+seen = {"requests": [], "agents": [], "posts": []}
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *a): pass
-    def do_GET(self):
-        seen["requests"].append(self.path)
-        seen["agents"].append(self.headers.get("User-Agent", ""))
-        url = urllib.parse.urlparse(self.path)
-        if url.path == "/html/":
-            q = urllib.parse.parse_qs(url.query).get("q", [""])[0]
+    def do_POST(self):                      # the results page's own search form (method="post")
+        n = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(n).decode()
+        seen["posts"].append((self.path, body, self.headers.get("Content-Type", "")))
+        q = urllib.parse.parse_qs(body).get("q", [""])[0]
+        self.answer(self.results(q))
+    def results(self, q):
+        if True:
             t1 = wrapped("https://10.0.2.2:8445/target.html?" + TARGET_QUERY)
             t2 = wrapped("https://10.0.2.2:8445/other.html")
             body = f"""<html><head><title>{q} at DuckDuckGo</title></head><body>
-<form action="/html/" method="post"><input type="text" name="q" value="{q}"><input type="submit" value="S"></form>
+<form action="/html/" method="post"><input type="text" name="q" value="{q}"><input type="hidden" name="kl" value="us-en"><input type="submit" value="S"></form>
 <div class="result"><h2 class="result__title"><a class="result__a" href="{t1}">NimbusOS hobby OS</a></h2>
 <a class="result__url" href="{t1}">10.0.2.2:8445/target.html</a>
 <a class="result__snippet" href="{t1}">A hobby <b>operating system</b> written from scratch.</a></div>
 <div class="result"><h2 class="result__title"><a class="result__a" href="{t2}">Another result</a></h2></div>
 <a href="/html/?q={urllib.parse.quote_plus(q)}&amp;s=30">Next</a>
 </body></html>"""
+        return body
+    def do_GET(self):
+        seen["requests"].append(self.path)
+        seen["agents"].append(self.headers.get("User-Agent", ""))
+        url = urllib.parse.urlparse(self.path)
+        if url.path == "/html/":
+            body = self.results(urllib.parse.parse_qs(url.query).get("q", [""])[0])
         elif url.path == "/target.html":
             body = "<html><head><title>Search target</title></head><body><h1>You reached the target</h1></body></html>"
         else:
             self.send_error(404)
             return
+        self.answer(body)
+    def answer(self, body):
         data = body.encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -79,7 +90,7 @@ server.socket = ctx.wrap_socket(server.socket, server_side=True)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 time.sleep(0.5)
 
-LINK1 = (170, 181)          # the first result's title link, inside the browser window
+LINK1 = (170, 217)          # the first result title link, below the results page's own search form
 try:
     with Qemu([IMG], name="search") as q:
         q.wait_serial(r"Desktop ready", timeout=40)
@@ -95,6 +106,14 @@ try:
         q.wait_serial(r'loaded https://10\.0\.2\.2:8445/html/\?q=nimbus\+os\+search: HTTP 200, \d+ bytes, \d+ links, title "nimbus os search at DuckDuckGo"', 30)
         time.sleep(1.0)
         q.screenshot(f"{S}/search-results.png")
+        # the results page has its own search form: click the box, replace the words, press Enter (POST)
+        q.click(200, 178)
+        time.sleep(0.3)
+        q.key("ctrl-a")
+        q.type("second query\n", delay=0.04)
+        q.wait_serial(r'loaded https://10\.0\.2\.2:8445/html/: HTTP 200, \d+ bytes, \d+ links, title "second query at DuckDuckGo"', 30)
+        time.sleep(1.0)
+        q.screenshot(f"{S}/search-form.png")
         q.click(*LINK1)
         q.wait_serial(r'loaded https://10\.0\.2\.2:8445/target\.html\?x=1&y=2: HTTP 200, \d+ bytes, 0 links, title "Search target"', 30)
         time.sleep(1.0)
@@ -105,5 +124,9 @@ finally:
 
 assert "/html/?q=nimbus+os+search" in seen["requests"], seen["requests"]
 assert "/target.html?" + TARGET_QUERY in seen["requests"], seen["requests"]
+assert len(seen["posts"]) == 1, seen["posts"]
+path, body, ctype = seen["posts"][0]
+assert path == "/html/" and ctype == "application/x-www-form-urlencoded", (path, ctype)
+assert urllib.parse.parse_qs(body) == {"q": ["second query"], "kl": ["us-en"]}, body        # typed text + hidden field
 assert all("Mozilla/5.0" in a and "NimbusOS" in a for a in seen["agents"]), seen["agents"]
 print("search: PASS")
