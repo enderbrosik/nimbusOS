@@ -543,9 +543,14 @@ DHCP, DNS, TCP (client, with retransmission) and HTTP/1.0. Terminal commands:
 | `wget <url> [file]` | HTTP or HTTPS download into the file system |
 | `http <url>` | print a page |
 
-The **Web Browser** (Start menu) is a text-mode HTML viewer: it renders
-headings, paragraphs, lists, `<pre>` and links (click to follow, Back,
-address bar). It opens `http://` and `https://` pages and understands core
+The **Web Browser** (Start menu) renders headings, paragraphs, nested and
+numbered lists, blockquotes, `<pre>`, rules, italic and bold text with
+accented letters and real quotes, **tables** (columns sized from their
+contents, `colspan`, borders, cell colours, nested tables), **pictures**
+(PNG, GIF and baseline JPEG, decoded with integer maths by `gui/imgdec.c`),
+**forms** (text boxes, passwords, check boxes, radio buttons, buttons;
+GET and POST), and old markup (`<font>`, `align=`, `<body bgcolor>`).
+Links can be clicked (Back, address bar). It opens `http://` and `https://` pages and understands core
 CSS (`<style>` blocks and `style=""`: colours, bold, sizes, alignment,
 underline, `display: none`; tag, class and id selectors). Words typed in
 the address bar (text with spaces, or without a dot, colon or slash) search
