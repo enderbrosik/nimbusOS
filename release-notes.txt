@@ -1,6 +1,7 @@
 # One line per note; shown on the download page and in Nimbus Update. Lines starting with # are ignored.
-UI scale from 75% to 200%, set in Settings > Appearance (sharp scaling of windows, text and icons)
-Display resolutions from 180p to 4K, named and with aspect ratios, in a scrollable list
-Nimbus Update: signed system updates from nimbusos.vercel.app, with two kernel slots so an update can't break booting
-Nimbus Update only contacts nimbusos.vercel.app
-Mouse wheel scrolls the resolution list
+Cursor: choose the pointer style, size and colour in Settings > Cursor, or use your own small BMP picture as the pointer
+Block Runner: an original side-scrolling jump game in the Start menu
+Calculator: a four-function desk calculator in the Start menu, with keyboard input
+Breakout: a brick-breaking game in the Start menu
+System clipboard: Ctrl+C and Ctrl+V work in text fields, and Ctrl+Shift+C shows the clipboard history
+Paint: transparent pen (first swatch), canvas sizes from 32x32 to 3840x2160 (Size, or Ctrl+W), and transparent pictures save with alpha
