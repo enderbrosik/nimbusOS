@@ -873,6 +873,87 @@ static char *find_header(char *buf, char *hdr_end, const char *name)
     return NULL;
 }
 
+/* ---- cookies: a small in-memory jar (session cookies only, cleared at reboot) ----
+ * Sites use cookies to remember a visit: that a challenge was passed, a language choice, a
+ * session.  Cookies are kept per host (or per Domain= they set, if it covers the host), are
+ * sent back to that host only, never over plain http when marked Secure, and never logged. */
+#define JAR_N 32
+static struct cookie { char host[96], name[40], value[120]; bool secure, used; } jar[JAR_N];
+
+static bool cookie_host_ok(const char *chost, const char *host)
+{
+    int cl = strlen(chost), hl = strlen(host);
+    if (hl == cl) return !strcasecmp(chost, host);
+    return hl > cl && host[hl - cl - 1] == '.' && !strcasecmp(host + hl - cl, chost);
+}
+
+/* one Set-Cookie header value: "name=value; Domain=...; Max-Age=...; Secure; ..." */
+static void jar_store(const char *host, bool tls, const char *sc)
+{
+    (void)tls;
+    while (*sc == ' ') sc++;
+    const char *eq = strchr(sc, '='), *semi = strchr(sc, ';');
+    if (!eq || (semi && semi < eq) || eq == sc) return;
+    char name[40], value[120], dom[96];
+    int nl = MIN((int)(eq - sc), 39), vl = MIN((int)((semi ? semi : sc + strlen(sc)) - eq - 1), 119);
+    memcpy(name, sc, nl); name[nl] = 0;
+    memcpy(value, eq + 1, vl); value[vl] = 0;
+    strlcpy(dom, host, sizeof dom);
+    bool secure = false, remove = !value[0];
+    for (const char *p = semi; p && *p;) {
+        p++;                                            /* past ';' */
+        while (*p == ' ') p++;
+        if (!strncasecmp(p, "domain=", 7)) {
+            const char *d = p + 7;
+            if (*d == '.') d++;
+            int dl = 0;
+            while (d[dl] && d[dl] != ';' && dl < 95) dl++;
+            char cand[96];
+            memcpy(cand, d, dl); cand[dl] = 0;
+            if (!cookie_host_ok(cand, host)) return;    /* a site may only set cookies for its own domain */
+            strlcpy(dom, cand, sizeof dom);
+        } else if (!strncasecmp(p, "max-age=", 8)) {
+            if (atoi(p + 8) <= 0) remove = true;
+        } else if (!strncasecmp(p, "expires=", 8)) {
+            const char *e = strchr(p, ';');
+            const char *t = strstr(p, "1970");
+            if (t && (!e || t < e)) remove = true;      /* already expired: the usual way to delete */
+        } else if (!strncasecmp(p, "secure", 6)) secure = true;
+        p = strchr(p, ';');
+    }
+    LOCK();
+    int slot = -1, freeslot = -1;
+    for (int i = 0; i < JAR_N; i++) {
+        if (!jar[i].used) { if (freeslot < 0) freeslot = i; continue; }
+        if (!strcasecmp(jar[i].host, dom) && !strcmp(jar[i].name, name)) slot = i;
+    }
+    if (remove) { if (slot >= 0) jar[slot].used = false; }
+    else {
+        if (slot < 0) slot = freeslot >= 0 ? freeslot : 0;
+        strlcpy(jar[slot].host, dom, sizeof jar[slot].host);
+        strlcpy(jar[slot].name, name, sizeof jar[slot].name);
+        strlcpy(jar[slot].value, value, sizeof jar[slot].value);
+        jar[slot].secure = secure;
+        jar[slot].used = true;
+    }
+    UNLOCK();
+}
+
+/* "Cookie: a=b; c=d\r\n" for a request to host, or an empty string */
+static void jar_header(const char *host, bool tls, char *out, int max)
+{
+    out[0] = 0;
+    LOCK();
+    for (int i = 0; i < JAR_N; i++) {
+        if (!jar[i].used || (jar[i].secure && !tls) || !cookie_host_ok(jar[i].host, host)) continue;
+        int o = strlen(out);
+        if (o + (int)strlen(jar[i].name) + (int)strlen(jar[i].value) + 20 >= max) break;
+        snprintf(out + o, max - o, "%s%s=%s", out[0] ? "; " : "Cookie: ", jar[i].name, jar[i].value);
+    }
+    UNLOCK();
+    if (out[0]) strlcat(out, "\r\n", max);
+}
+
 /* Decode a "Transfer-Encoding: chunked" body in place; returns its length. */
 static u32 dechunk(char *body, u32 len)
 {
@@ -946,12 +1027,13 @@ int http_request(const char *url_in, const char *post, char **body, u32 *blen, i
         struct conn c;
         r = conn_open(&c, ip, port, use_tls, host);
         if (r) return r;
-        char req[1024], extra[96] = "";
+        char req[2048], extra[96] = "", ck[700];
+        jar_header(host, use_tls, ck, sizeof ck);
         if (post) snprintf(extra, sizeof extra, "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %u\r\n", (u32)strlen(post));
         int n = snprintf(req, sizeof req,
             "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0 (compatible; NimbusOS/" NIMBUS_VERSION "; text browser)\r\n"
-            "Accept: text/html, text/plain, */*\r\nAccept-Language: en-US,en;q=0.8\r\n%s"
-            "Accept-Encoding: identity\r\nConnection: close\r\n\r\n", post ? "POST" : "GET", path, host, extra);
+            "Accept: text/html, text/plain, */*\r\nAccept-Language: en-US,en;q=0.8\r\n%s%s"
+            "Accept-Encoding: identity\r\nConnection: close\r\n\r\n", post ? "POST" : "GET", path, host, extra, ck);
         if (conn_send(&c, req, n) < 0 || (post && conn_send(&c, post, strlen(post)) < 0)) { conn_close(&c); return NET_ERESET; }
         u32 cap = 16384, len = 0;
         char *buf = kmalloc(cap + 1);
@@ -977,6 +1059,14 @@ int http_request(const char *url_in, const char *post, char **body, u32 *blen, i
             return got == NET_ETLS ? NET_ETLS : NET_EPROTO;
         }
         int code = atoi(buf + 9);
+        for (char *ln = strstr(buf, "\r\n"); ln && ln < hdr_end;) {          /* remember every Set-Cookie */
+            ln += 2;
+            if (!strncasecmp(ln, "Set-Cookie:", 11)) {
+                char *e = strstr(ln, "\r\n");
+                if (e) { *e = 0; jar_store(host, use_tls, ln + 11); *e = '\r'; }
+            }
+            ln = strstr(ln, "\r\n");
+        }
         if (code == 301 || code == 302 || code == 303 || code == 307 || code == 308) {
             char *loc = find_header(buf, hdr_end, "Location");
             if (loc) {
