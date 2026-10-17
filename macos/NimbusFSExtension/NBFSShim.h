@@ -1,8 +1,8 @@
 /* C side of the NimbusFS FSKit extension: a thin layer that lets Swift use fs/nbfs.c.
- * Bridging header contents: #include "NBFSShim.h" */
+ */
 #ifndef NBFS_SHIM_H
 #define NBFS_SHIM_H
-#include "../../fs/nbfs.h"
+#include "fs/nbfs.h"        /* found through Header Search Paths = the repo root */
 
 typedef int (*nbfs_shim_io)(void *ctx, uint32_t lba, uint32_t count, void *buf);
 typedef int (*nbfs_shim_wio)(void *ctx, uint32_t lba, uint32_t count, const void *buf);

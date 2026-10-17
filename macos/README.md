@@ -13,8 +13,8 @@ signatures on the first build (Xcode's fix-it suggestions show the right ones). 
 2. **File ▸ New ▸ Target ▸ macOS ▸ File System Extension** (call it `NimbusFSExtension`). If the template is not
    in the list, your Xcode is too old for FSKit.
 3. Delete the template's generated Swift files in the extension target and drag these in (target: the extension):
-   `NimbusFileSystem.swift`, `NimbusVolume.swift`, `NBFSShim.c`, `NBFSShim.h` and `../fs/nbfs.c`, `../fs/nbfs.h`.
-4. In the extension target's **Build Settings**: *Objective-C Bridging Header* = `NimbusFSExtension/NBFSShim.h`;
+   `NimbusFileSystem.swift`, `NimbusVolume.swift`, `NBFSShim.c`, `NBFSShim.h`, `NimbusFSExtension-Bridging-Header.h` and `../fs/nbfs.c`.
+4. In the extension target's **Build Settings**: *Objective-C Bridging Header* = the full path of `NimbusFSExtension-Bridging-Header.h`;
    *Header Search Paths* = the repo root (so `../../fs/nbfs.h` resolves).
 5. In the extension's `Info.plist`, under `EXAppExtensionAttributes`, set `FSShortName` = `nimbusfs`, `FSPersonalities`
    with `FSName` = `NimbusFS`, `FSMediaTypes` for a Basic Data / Linux partition type, and `FSSupportsBlockResources` = YES
