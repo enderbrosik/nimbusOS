@@ -80,6 +80,7 @@ void gfx_ui_centered(surface_t *s, rect_t r, const char *str, u32 fg);
 /* Explicit faces, for the browser: body text, bold, and 20 px headings. */
 enum { UI_FACE_REG, UI_FACE_BOLD, UI_FACE_LARGE, UI_FACE_LARGE_BOLD, UI_FACE_COUNT };
 int  gfx_ui_face_text(surface_t *s, int x, int y, const char *str, int face, u32 fg);
+int  gfx_ui_face_text_italic(surface_t *s, int x, int y, const char *str, int face, u32 fg);   /* slanted */
 int  gfx_ui_face_width(const char *str, int face);
 int  gfx_ui_face_height(int face);
 int  gfx_ui_face_ascent(int face);

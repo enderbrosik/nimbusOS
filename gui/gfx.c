@@ -397,6 +397,35 @@ int gfx_ui_face_text(surface_t *s, int x, int y, const char *str, int face, u32 
     return x - x0;
 }
 
+/* Italic is synthesised: each row of a glyph is shifted right in proportion to its height
+ * above the baseline (about 14 degrees). */
+static int ui_char_slant(surface_t *s, const struct ui_face *f, int x, int y, unsigned char ch, u32 fg)
+{
+    const struct ui_glyph *g = ui_glyph(f, ch);
+    if (!g->w) return g->adv;
+    int gx = x + g->xoff, gy = y + g->yoff;
+    rect_t rows = rect_intersect(rect_make(gx - 8, gy, g->w + 16, g->h), s->clip);
+    for (int j = rows.y; j < rows.y + rows.h; j++) {
+        int dx = (y + f->ascent - j) / 4;
+        u32 *row = s->px + j * s->pitch;
+        const u8 *src = f->pix + g->off + (j - gy) * g->w;
+        for (int i = 0; i < g->w; i++) {
+            int a = src[i], xx = gx + i + dx;
+            if (!a || xx < s->clip.x || xx >= s->clip.x + s->clip.w) continue;
+            row[xx] = a == 255 ? fg : color_blend(row[xx], fg, a);
+        }
+    }
+    return g->adv;
+}
+
+int gfx_ui_face_text_italic(surface_t *s, int x, int y, const char *str, int face, u32 fg)
+{
+    const struct ui_face *f = ui_face_of(face);
+    int x0 = x;
+    for (; *str; str++) x += *str == '\t' ? 16 : ui_char_slant(s, f, x, y, (unsigned char)*str, fg);
+    return x - x0;
+}
+
 int gfx_ui_face_width(const char *str, int face)
 {
     const struct ui_face *f = ui_face_of(face);

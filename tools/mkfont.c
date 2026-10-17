@@ -14,6 +14,14 @@
 #include <string.h>
 
 #define FIRST 32
+
+/* Bytes 0x80-0x9F are control characters in Latin-1; the browser uses them for the
+ * Windows-1252 characters (quotes, bullet, dashes, ellipsis, ...), so the table
+ * draws those instead.  0x20 stands for the unused ones. */
+static const int cp1252[32] = {
+    0x20AC, 0x20, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x20, 0x017D, 0x20,
+    0x20, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x20, 0x017E, 0x0178,
+};
 #define LAST 255
 #define NGLYPH (LAST - FIRST + 1)
 
@@ -52,7 +60,9 @@ static void emit_face(FILE *out, const char *name, const char *path, int pixels)
     struct glyph gl[NGLYPH];
     int total = 0;
     for (int i = 0; i < NGLYPH; i++) {
-        int idx = stbtt_FindGlyphIndex(&info, FIRST + i);
+        int cp = FIRST + i;
+        if (cp >= 0x80 && cp <= 0x9F) cp = cp1252[cp - 0x80];
+        int idx = stbtt_FindGlyphIndex(&info, cp);
         if (!idx) idx = stbtt_FindGlyphIndex(&info, '?');
         int advance, lsb, x0, y0, x1, y1;
         stbtt_GetGlyphHMetrics(&info, idx, &advance, &lsb);

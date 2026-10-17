@@ -30,14 +30,15 @@
 /* Words typed in the address bar are searched with this (setting "search_url"). */
 #define SEARCH_URL "https://html.duckduckgo.com/html/?q="
 
-enum { ST_NORMAL = 0, ST_BOLD = 1, ST_HEADING = 2, ST_PRE = 4, ST_UNDERLINE = 8, ST_COLOR = 16 };
-enum { IT_WORD, IT_BREAK, IT_PARA };
+enum { ST_NORMAL = 0, ST_BOLD = 1, ST_HEADING = 2, ST_PRE = 4, ST_UNDERLINE = 8, ST_COLOR = 16, ST_ITALIC = 32, ST_MARKER = 64, ST_RULE = 128 };
+enum { IT_WORD, IT_BREAK, IT_PARA, IT_RULE, IT_GAP };
+#define INDENT_PX 24                /* one level of list or blockquote indentation */
 
 /* the computed style of an element (inherited by its children) */
-struct cstyle { u8 bold, large, pre, underline, align, hidden, colored; u32 color; };
+struct cstyle { u8 bold, large, pre, underline, align, hidden, colored, italic, indent, marker; u32 color; };
 struct css_rule { char sel[48]; u8 spec; u32 off, len; };     /* declarations are in web.css */
 
-struct item { u8 type, style, align, glue; i16 link; u32 off, len, color; };
+struct item { u8 type, style, align, glue, indent; i16 link; u32 off, len, color; };
 struct run { int x, line, w; u32 off, len, color; u8 style, align; i16 link; };
 
 struct web {
@@ -82,18 +83,20 @@ static void add_item(struct web *b, int type, const struct cstyle *c, int link, 
     static const struct cstyle none;
     if (!c) c = &none;
     u8 style = (c->bold ? ST_BOLD : 0) | (c->large ? ST_HEADING : 0) | (c->pre ? ST_PRE : 0) |
-               (c->underline ? ST_UNDERLINE : 0) | (c->colored ? ST_COLOR : 0);
-    if (type != IT_WORD && b->nitems) {
+               (c->underline ? ST_UNDERLINE : 0) | (c->colored ? ST_COLOR : 0) | (c->italic ? ST_ITALIC : 0) |
+               (c->marker ? ST_MARKER : 0) | (type == IT_RULE ? ST_RULE : 0);
+    bool brk = type == IT_BREAK || type == IT_PARA;
+    if (brk && b->nitems) {
         struct item *last = &b->items[b->nitems - 1];
         if (last->type == IT_PARA) return;                         /* collapse breaks */
         if (last->type == IT_BREAK && type == IT_BREAK) { last->type = IT_PARA; return; }
         if (last->type == IT_BREAK && type == IT_PARA) { last->type = IT_PARA; return; }
     }
-    if (type != IT_WORD && !b->nitems) return;
+    if ((brk || type == IT_GAP) && !b->nitems) return;
     if (b->nitems == b->icap) { b->icap = b->icap ? b->icap * 2 : 256; b->items = krealloc(b->items, b->icap * sizeof *b->items); }
     if (len && b->tlen + len + 1 > b->tcap) { b->tcap = (b->tlen + len + 1) * 2; b->text = krealloc(b->text, b->tcap); }
     struct item *it = &b->items[b->nitems++];
-    it->type = (u8)type; it->style = style; it->align = c->align; it->glue = glue; it->link = (i16)link;
+    it->type = (u8)type; it->style = style; it->align = c->align; it->glue = glue; it->indent = c->indent; it->link = (i16)link;
     it->color = c->color; it->off = b->tlen; it->len = len;
     if (len) { memcpy(b->text + b->tlen, s, len); b->tlen += len; }
 }
@@ -101,8 +104,28 @@ static void add_item(struct web *b, int type, const struct cstyle *c, int link, 
 /* The UI font is ASCII, so Unicode text is shown as its closest ASCII
  * spelling: curly quotes become straight ones, dashes '-', accented
  * letters their base letter, invisible characters nothing at all. */
+static bool g_rich;       /* true: Latin-1 and Windows-1252 bytes for the UI font; false: plain ASCII (pre, titles) */
+
+/* the Windows-1252 byte of a Unicode character (the font draws bytes 0x80-0x9F as these), or 0 */
+static u8 cp1252_byte(u32 cp)
+{
+    static const struct { u16 cp; u8 b; } m[] = {
+        { 0x20AC, 0x80 }, { 0x201A, 0x82 }, { 0x0192, 0x83 }, { 0x201E, 0x84 }, { 0x2026, 0x85 }, { 0x2020, 0x86 },
+        { 0x2021, 0x87 }, { 0x2030, 0x89 }, { 0x0160, 0x8A }, { 0x2039, 0x8B }, { 0x0152, 0x8C }, { 0x017D, 0x8E },
+        { 0x2018, 0x91 }, { 0x2019, 0x92 }, { 0x201C, 0x93 }, { 0x201D, 0x94 }, { 0x2022, 0x95 }, { 0x2013, 0x96 },
+        { 0x2014, 0x97 }, { 0x2122, 0x99 }, { 0x0161, 0x9A }, { 0x203A, 0x9B }, { 0x0153, 0x9C }, { 0x017E, 0x9E },
+        { 0x0178, 0x9F },
+    };
+    for (unsigned i = 0; i < sizeof m / sizeof m[0]; i++) if (m[i].cp == cp) return m[i].b;
+    return 0;
+}
+
 static const char *uni_ascii(u32 cp, char tmp[2])
 {
+    if (g_rich) {
+        u8 b = cp >= 0xA1 && cp <= 0xFF && cp != 0xAD ? (u8)cp : cp1252_byte(cp);
+        if (b) { tmp[0] = (char)b; tmp[1] = 0; return tmp; }
+    }
     static const char latin1[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";
     if (cp >= 32 && cp < 127) { tmp[0] = (char)cp; tmp[1] = 0; return tmp; }
     if (cp >= 0xC0 && cp <= 0xFF) {
@@ -206,10 +229,26 @@ static const char *entity(const char *p, int *consumed, char tmp[2])
     }
     /* accented letters: &eacute; &Uuml; &ccedil; &atilde; &aring; ... -> the letter */
     if (isalpha(p[0])) {
-        static const char *marks[] = { "acute;", "grave;", "uml;", "circ;", "tilde;", "cedil;", "ring;", "slash;", "caron;" };
-        for (unsigned i = 0; i < ARRAY_SIZE(marks); i++) {
-            int l = strlen(marks[i]);
-            if (!strncmp(p + 1, marks[i], l)) { *consumed = 1 + l; tmp[0] = p[0]; tmp[1] = 0; return tmp; }
+        /* letters that have an accented form, and the Latin-1 codes of those forms */
+        static const struct { const char *mark, *letters, *codes; } acc[] = {
+            { "acute;", "AEIOUYaeiouy", "\xC1\xC9\xCD\xD3\xDA\xDD\xE1\xE9\xED\xF3\xFA\xFD" },
+            { "grave;", "AEIOUaeiou", "\xC0\xC8\xCC\xD2\xD9\xE0\xE8\xEC\xF2\xF9" },
+            { "uml;", "AEIOUaeiouy", "\xC4\xCB\xCF\xD6\xDC\xE4\xEB\xEF\xF6\xFC\xFF" },
+            { "circ;", "AEIOUaeiou", "\xC2\xCA\xCE\xD4\xDB\xE2\xEA\xEE\xF4\xFB" },
+            { "tilde;", "ANOano", "\xC3\xD1\xD5\xE3\xF1\xF5" },
+            { "cedil;", "Cc", "\xC7\xE7" },
+            { "ring;", "Aa", "\xC5\xE5" },
+            { "slash;", "Oo", "\xD8\xF8" },
+            { "caron;", "", "" },
+        };
+        for (unsigned i = 0; i < ARRAY_SIZE(acc); i++) {
+            int l = strlen(acc[i].mark);
+            if (strncmp(p + 1, acc[i].mark, l)) continue;
+            *consumed = 1 + l;
+            for (int k = 0; acc[i].letters[k]; k++)
+                if (acc[i].letters[k] == p[0]) return uni_ascii((u8)acc[i].codes[k], tmp);
+            tmp[0] = p[0]; tmp[1] = 0;                  /* no such accented letter: the plain one */
+            return tmp;
         }
     }
     *consumed = 0;
@@ -222,7 +261,7 @@ static const char *entity(const char *p, int *consumed, char tmp[2])
  * compound (tag, .class, #id, or a combination); in a descendant selector
  * only the last compound counts.  Pseudo-classes and at-rules (@media ...)
  * are skipped.  Properties: color, background-color (ignored), font-weight,
- * font-size, font-style (ignored: there is no italic face), text-align,
+ * font-size, font-style (italic is slanted text), text-align,
  * text-decoration (underline), display (none).  Rules apply by specificity
  * (tag, then class, then id), then the style attribute. */
 
@@ -338,6 +377,9 @@ static void apply_decl(struct cstyle *c, const char *name, int nl, const char *v
         if (ci_equal(v, vl, "bold") || ci_equal(v, vl, "bolder")) c->bold = 1;
         else if (ci_equal(v, vl, "normal") || ci_equal(v, vl, "lighter")) c->bold = 0;
         else { int t = css_length(v, vl, u); if (t >= 0 && !u[0] && t / 10 >= 600) c->bold = 1; else if (t >= 0 && !u[0]) c->bold = 0; }
+    } else if (ci_equal(name, nl, "font-style")) {
+        if (ci_equal(v, vl, "italic") || ci_equal(v, vl, "oblique")) c->italic = 1;
+        else if (ci_equal(v, vl, "normal")) c->italic = 0;
     } else if (ci_equal(name, nl, "font-size")) {
         css_font_size(c, v, vl);
     } else if (ci_equal(name, nl, "text-align")) {
@@ -581,6 +623,10 @@ static void element_style(struct web *b, struct cstyle *c, const char *tag, cons
     else if (!strcmp(tag, "pre")) c->pre = 1;
     else if (!strcmp(tag, "u") || !strcmp(tag, "ins")) c->underline = 1;
     else if (!strcmp(tag, "center")) c->align = 1;
+    else if (!strcmp(tag, "i") || !strcmp(tag, "em") || !strcmp(tag, "cite") || !strcmp(tag, "var") ||
+             !strcmp(tag, "dfn") || !strcmp(tag, "address")) c->italic = 1;
+    else if (!strcmp(tag, "ul") || !strcmp(tag, "ol") || !strcmp(tag, "menu") || !strcmp(tag, "dir") ||
+             !strcmp(tag, "blockquote") || !strcmp(tag, "dd")) { if (c->indent < 6) c->indent++; }
     else if (!strcmp(tag, "a")) c->colored = 0;      /* links keep their own colour unless a rule sets one */
     for (int spec = 1; spec <= 3; spec++)
         for (int i = 0; i < b->nrules; i++) {
@@ -588,6 +634,14 @@ static void element_style(struct web *b, struct cstyle *c, const char *tag, cons
             if (r->spec == spec && compound_match(r->sel, tag, idv, cls)) apply_decls(c, b->css + r->off, r->len);
         }
     if (inl[0]) apply_decls(c, inl, strlen(inl));
+}
+
+static bool block_tag(const char *t)
+{
+    static const char *names[] = { "p", "div", "ul", "ol", "li", "table", "tr", "td", "th", "section", "article", "header",
+        "footer", "nav", "blockquote", "form", "dl", "dt", "dd", "pre", "br", "hr", "h1", "h2", "h3", "h4", "h5", "h6" };
+    for (unsigned i = 0; i < ARRAY_SIZE(names); i++) if (!strcmp(t, names[i])) return true;
+    return false;
 }
 
 static bool void_tag(const char *t)
@@ -608,6 +662,8 @@ static void parse_html(struct web *b, const char *h, bool plain)
     if (plain) cur->pre = 1;
     if (!plain) collect_css(b, h);
     int link = -1, skip = 0;               /* skip > 0 while inside script/noscript */
+    int olcount[MAXDEPTH];                 /* the last number used by each open <ol> */
+    memset(olcount, 0, sizeof olcount);
     char word[256];
     int wl = 0;
     bool word_glue = false;                /* the word directly follows text or a tag */
@@ -625,6 +681,7 @@ static void parse_html(struct web *b, const char *h, bool plain)
             const char *q = p + 1 + close;
             while (tl < 15 && isalnum((u8)*q)) tag[tl++] = (char)tolower((u8)*q++);
             tag[tl] = 0;
+            if (block_tag(tag)) prev = ' ';              /* what follows starts a new block: it never glues */
             char href[256] = "", cls[128] = "", idv[64] = "", inl[256] = "";
             if (!close) tag_attrs(q, e, href, cls, idv, inl);
             if (!strcmp(tag, "script") || !strcmp(tag, "noscript")) skip += close ? -1 : 1;
@@ -638,6 +695,7 @@ static void parse_html(struct web *b, const char *h, bool plain)
                 const char *te = strstr(e + 1, "</");
                 if (te) {
                     /* convert entities / UTF-8 the same way as body text */
+                    g_rich = false;
                     int o = 0;
                     for (const char *t = e + 1; t < te && o < (int)sizeof b->title - 4;) {
                         char tmp[2];
@@ -662,26 +720,49 @@ static void parse_html(struct web *b, const char *h, bool plain)
                     depth = i;
                     cur = depth ? &stack[depth - 1] : &stack[0];
                     if (!strcmp(tag, "pre") || (tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6') || !strcmp(tag, "p") ||
-                        !strcmp(tag, "div")) add_item(b, IT_PARA, cur, -1, NULL, 0, false);
+                        !strcmp(tag, "div") || !strcmp(tag, "blockquote") || !strcmp(tag, "table") || !strcmp(tag, "dl"))
+                        add_item(b, IT_PARA, cur, -1, NULL, 0, false);
+                    else if (!strcmp(tag, "ul") || !strcmp(tag, "ol"))      /* a gap after a list; a nested list just ends the line */
+                        add_item(b, depth > 0 && !strcmp(stag[depth - 1], "li") ? IT_BREAK : IT_PARA, cur, -1, NULL, 0, false);
                     if (!strcmp(tag, "a")) link = -1;
+                    if ((!strcmp(tag, "td") || !strcmp(tag, "th")) && !cur->hidden) add_item(b, IT_GAP, cur, -1, NULL, 0, false);
                 }
                 if (!strcmp(tag, "a") && i < 0) link = -1;
             } else {
                 bool hidden = cur->hidden;
-                if (!strcmp(tag, "br")) add_item(b, IT_BREAK, cur, -1, NULL, 0, false);
-                else if (!strcmp(tag, "p") || !strcmp(tag, "div") || !strcmp(tag, "ul") || !strcmp(tag, "ol") ||
-                         !strcmp(tag, "table") || !strcmp(tag, "tr") || !strcmp(tag, "section") || !strcmp(tag, "article") ||
-                         !strcmp(tag, "header") || !strcmp(tag, "footer") || !strcmp(tag, "nav") || !strcmp(tag, "blockquote") ||
-                         !strcmp(tag, "form") || !strcmp(tag, "hr") || !strcmp(tag, "dl") || !strcmp(tag, "dt") || !strcmp(tag, "dd") ||
-                         !strcmp(tag, "pre") || (tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6' && !tag[2]))
-                    add_item(b, IT_PARA, cur, -1, NULL, 0, false);
-                if (!strcmp(tag, "li")) { add_item(b, IT_BREAK, cur, -1, NULL, 0, false); add_item(b, IT_WORD, cur, -1, "\x07", 1, false); }
+                if (!hidden) {
+                    if (!strcmp(tag, "br") || !strcmp(tag, "tr")) add_item(b, IT_BREAK, cur, -1, NULL, 0, false);
+                    else if (!strcmp(tag, "hr")) {
+                        add_item(b, IT_PARA, cur, -1, NULL, 0, false);
+                        add_item(b, IT_RULE, cur, -1, NULL, 0, false);
+                        add_item(b, IT_PARA, cur, -1, NULL, 0, false);
+                    } else if ((!strcmp(tag, "ul") || !strcmp(tag, "ol")) && depth > 0 && !strcmp(stag[depth - 1], "li")) {
+                        add_item(b, IT_BREAK, cur, -1, NULL, 0, false);       /* a list inside an item */
+                    } else if (!strcmp(tag, "p") || !strcmp(tag, "div") || !strcmp(tag, "ul") || !strcmp(tag, "ol") ||
+                             !strcmp(tag, "table") || !strcmp(tag, "section") || !strcmp(tag, "article") ||
+                             !strcmp(tag, "header") || !strcmp(tag, "footer") || !strcmp(tag, "nav") || !strcmp(tag, "blockquote") ||
+                             !strcmp(tag, "form") || !strcmp(tag, "dl") || !strcmp(tag, "dt") || !strcmp(tag, "dd") ||
+                             !strcmp(tag, "pre") || (tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6' && !tag[2]))
+                        add_item(b, IT_PARA, cur, -1, NULL, 0, false);
+                    if (!strcmp(tag, "li")) {              /* a bullet, or the next number of the nearest <ol> */
+                        char mk[12] = "\x95";
+                        int k = depth - 1;
+                        while (k >= 0 && strcmp(stag[k], "ul") && strcmp(stag[k], "ol") && strcmp(stag[k], "menu") && strcmp(stag[k], "dir")) k--;
+                        if (k >= 0 && !strcmp(stag[k], "ol")) snprintf(mk, sizeof mk, "%d.", ++olcount[k]);
+                        struct cstyle m = *cur;
+                        m.marker = 1;
+                        bool at_line_start = b->nitems && (b->items[b->nitems - 1].type == IT_BREAK || b->items[b->nitems - 1].type == IT_PARA);
+                        if (!at_line_start) add_item(b, IT_BREAK, cur, -1, NULL, 0, false);
+                        add_item(b, IT_WORD, &m, -1, mk, strlen(mk), false);
+                    }
+                }
                 if (!void_tag(tag) && depth < MAXDEPTH) {
                     stack[depth] = *cur;
                     element_style(b, &stack[depth], tag, idv, cls, inl);
                     if (!hidden && stack[depth].hidden) stack[depth].hidden = 1;
                     if (hidden) stack[depth].hidden = 1;                /* hidden inherits */
                     strlcpy(stag[depth], tag, sizeof stag[depth]);
+                    olcount[depth] = 0;
                     depth++;
                     cur = &stack[depth - 1];
                     if (!strcmp(tag, "a") && href[0] && b->nlinks < MAXLINKS) {
@@ -696,6 +777,7 @@ static void parse_html(struct web *b, const char *h, bool plain)
         }
         if (skip || cur->hidden) { p++; continue; }
         char c = *p;
+        g_rich = !cur->pre && !plain;
         if (c == '\r') { p++; continue; }
         if (cur->pre && c == '\n') { FLUSH(); add_item(b, IT_BREAK, cur, -1, NULL, 0, false); prev = ' '; p++; continue; }
         if (c == ' ' || c == '\t' || c == '\n') { FLUSH(); prev = ' '; p++; continue; }
@@ -751,6 +833,16 @@ static void align_lines(struct web *b, int width)
     }
 }
 
+static struct run *new_run(struct web *b, int x, int line, int w, const struct item *it)
+{
+    if (b->nruns == b->rcap) { b->rcap = b->rcap ? b->rcap * 2 : 512; b->runs = krealloc(b->runs, b->rcap * sizeof *b->runs); }
+    struct run *r = &b->runs[b->nruns++];
+    r->x = x; r->line = line; r->w = w;
+    r->off = it->off; r->len = it->len; r->style = it->style; r->align = it->align;
+    r->link = it->link; r->color = it->color;
+    return r;
+}
+
 static void layout(window_t *w)
 {
     struct web *b = w->app;
@@ -759,20 +851,32 @@ static void layout(window_t *w)
     b->laid_w = width;
     b->nruns = 0;
     int x = 0, line = 0, space = gfx_ui_width(" ");
+    bool first = true;                              /* nothing placed on this line yet */
+    bool after_marker = false;
     for (int i = 0; i < b->nitems; i++) {
         struct item *it = &b->items[i];
-        if (it->type == IT_BREAK) { x = 0; line++; continue; }
-        if (it->type == IT_PARA) { x = 0; line += 2; continue; }
+        int base = it->indent * INDENT_PX;          /* where lines of this block start */
+        if (it->type == IT_BREAK) { line++; first = true; continue; }
+        if (it->type == IT_PARA) { line += 2; first = true; continue; }
+        if (it->type == IT_RULE) { new_run(b, base, line, MAX(0, width - base), it); line++; first = true; continue; }
+        if (it->type == IT_GAP) { if (!first) x += 16; continue; }       /* between table cells */
         int ww = word_w(b, it);
-        int gap = x > 0 && !it->glue ? space : 0;
-        if (x > 0 && x + gap + ww > width) { x = 0; line++; gap = 0; }
+        int gap = first ? 0 : (it->glue && !after_marker ? 0 : space);
+        after_marker = false;
+        if (it->style & ST_MARKER) {                /* a bullet or number hangs left of the text */
+            x = MAX(0, base - ww - 6);
+            new_run(b, x, line, ww, it);
+            x = base - space;
+            first = false;
+            after_marker = true;
+            continue;
+        }
+        if (first) x = base;
+        else if (x + gap + ww > width) { line++; x = base; gap = 0; }
         x += gap;
-        if (b->nruns == b->rcap) { b->rcap = b->rcap ? b->rcap * 2 : 512; b->runs = krealloc(b->runs, b->rcap * sizeof *b->runs); }
-        struct run *r = &b->runs[b->nruns++];
-        r->x = x; r->line = line; r->w = ww;
-        r->off = it->off; r->len = it->len; r->style = it->style; r->align = it->align;
-        r->link = it->link; r->color = it->color;
+        new_run(b, x, line, ww, it);
         x += ww;
+        first = false;
     }
     align_lines(b, width);
     b->nlines = line + 1;
@@ -802,6 +906,11 @@ static void paint(window_t *w)
         struct run *r = &b->runs[i];
         if (r->line < first || r->line > last) continue;
         int x = c.x + MARGIN + r->x, y = c.y + MARGIN + (r->line - first) * LINE_H;
+        if (r->style & ST_RULE) {                       /* <hr> */
+            gfx_hline(s, x, y + 8, r->w, RGB(140, 140, 150));
+            gfx_hline(s, x, y + 9, r->w, RGB(235, 235, 240));
+            continue;
+        }
         char tmp[256];
         memcpy(tmp, b->text + r->off, r->len);
         tmp[r->len] = 0;
@@ -809,6 +918,7 @@ static void paint(window_t *w)
         u32 col = (r->style & ST_COLOR) ? r->color : r->link >= 0 ? (r->link == b->hover_link ? RGB(200, 40, 40) : RGB(20, 70, 200)) : C_TEXT;
         int face = style_face(r->style), tw, fh = gfx_ui_face_height(face);
         if (r->style & ST_PRE) { tw = gfx_text(s, x, y, tmp, col, COLOR_NONE); fh = FONT_H; }
+        else if (r->style & ST_ITALIC) tw = gfx_ui_face_text_italic(s, x, y, tmp, face, col);
         else tw = gfx_ui_face_text(s, x, y, tmp, face, col);
         if (r->link >= 0 || (r->style & ST_UNDERLINE)) gfx_hline(s, x, y + fh - 1, tw, col);
     }
