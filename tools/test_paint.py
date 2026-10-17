@@ -66,3 +66,27 @@ assert px[10, 10][3] == 0, px[10, 10]                              # second stro
 assert px[10, 7] == (255, 255, 255, 255), px[10, 7]                # between strokes: opaque white
 assert px[0, 0] == (255, 255, 255, 255), px[0, 0]
 print("paint (transparent pen, canvas size): PASS")
+
+# ---------------- the largest preset: 3840x2160 needs about 33 MB for the canvas.
+# Success is logged as "canvas size"; a refusal shows as "Not enough memory" in the dialog
+# (not logged), so this only checks that nothing crashes and records which one happened.
+with Qemu([IMG], name="paint-4k") as q:
+    q.wait_serial(r"Desktop ready", timeout=40)
+    q.mouse_home()
+    q.double_click(*ic(0, 2))
+    q.wait_serial(r'created: "Untitled - Paint"', 5)
+    time.sleep(0.4)
+    q.key("ctrl-w")
+    q.wait_serial(r'created: "Canvas Size"', 5)
+    time.sleep(0.3)
+    q.key("end")
+    for _ in range(12): q.key("backspace")
+    q.type("3840x2160\n", delay=0.04)
+    t0 = time.time()
+    while time.time() - t0 < 10 and "canvas size 3840x2160" not in q.serial():
+        time.sleep(0.2)
+    time.sleep(0.5)
+    q.screenshot(f"{S}/paint-4k.png")
+    assert "PANIC" not in q.serial()
+    result = "canvas size 3840x2160" in q.serial()
+    print("paint 3840x2160 preset: %s" % ("applied" if result else "refused (not enough memory) or not applied"))
