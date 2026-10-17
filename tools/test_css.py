@@ -39,6 +39,12 @@ try:
         q.wait_serial(r'loaded http://10\.0\.2\.2:8080/layout\.html: HTTP 200, \d+ bytes, 0 links, title "Layout test"', 15)
         time.sleep(1.0)
         q.screenshot(f"{S}/layout-page.png")
+        q.key("ctrl-l")                                 # tables, cell colours, legacy font/body attributes
+        time.sleep(0.3)
+        q.type("http://10.0.2.2:8080/table.html\n")
+        q.wait_serial(r'loaded http://10\.0\.2\.2:8080/table\.html: HTTP 200, \d+ bytes, 3 links, title "Table test"', 15)
+        time.sleep(1.0)
+        q.screenshot(f"{S}/table-page.png")
         assert "PANIC" not in q.serial()
 finally:
     web.terminate()

@@ -32,15 +32,16 @@
 #define SEARCH_URL "https://html.duckduckgo.com/html/?q="
 
 enum { ST_NORMAL = 0, ST_BOLD = 1, ST_HEADING = 2, ST_PRE = 4, ST_UNDERLINE = 8, ST_COLOR = 16, ST_ITALIC = 32, ST_MARKER = 64, ST_RULE = 128 };
-enum { IT_WORD, IT_BREAK, IT_PARA, IT_RULE, IT_GAP, IT_INPUT, IT_IMAGE };
+enum { IT_WORD, IT_BREAK, IT_PARA, IT_RULE, IT_GAP, IT_INPUT, IT_IMAGE, IT_TBL_BEGIN, IT_ROW, IT_CELL, IT_TBL_END };
+enum { RK_TEXT, RK_RECT };            /* what a run is: a word/picture/control, or a table cell's box */
 #define INDENT_PX 24                /* one level of list or blockquote indentation */
 
 /* the computed style of an element (inherited by its children) */
-struct cstyle { u8 bold, large, pre, underline, align, hidden, colored, italic, indent, marker; u32 color; };
+struct cstyle { u8 bold, large, pre, underline, align, hidden, colored, italic, indent, marker, mono; u32 color; };
 struct css_rule { char sel[48]; u8 spec; u32 off, len; };     /* declarations are in web.css */
 
 struct item { u8 type, style, align, glue, indent; i16 link, field, image; u32 off, len, color; };
-struct run { int x, line, w, h; u32 off, len, color; u8 style, align; i16 link, field, image; };   /* h: the height of an image */
+struct run { int x, line, w, h; u32 off, len, color; u8 style, align, kind; i16 link, field, image; };   /* h: height of a picture or cell box */
 
 /* form controls */
 enum { FK_TEXT, FK_PASSWORD, FK_HIDDEN, FK_SUBMIT, FK_CHECK, FK_RADIO };
@@ -66,6 +67,7 @@ struct web {
     int focus;                              /* the field being edited, or -1 */
     struct form forms[8]; int nforms;
     struct image images[MAXIMAGES]; int nimages;
+    u32 bgcolor, linkcolor; bool has_bg, has_link;       /* <body bgcolor=...> and <body link=...> */
     struct netjob *img_job; int img_cur;
     /* layout */
     struct run *runs; int nruns, rcap, nlines, laid_w;
@@ -84,6 +86,7 @@ static void doc_clear(struct web *b)
     b->nfields = 0;
     b->nforms = 0;
     b->focus = -1;
+    b->has_bg = b->has_link = false;
     for (int i = 0; i < b->nimages; i++) if (b->images[i].surf) surface_destroy(b->images[i].surf);
     b->nimages = 0;
     if (b->img_job) { netjob_cancel(b->img_job); netjob_release(b->img_job); b->img_job = NULL; }
@@ -104,7 +107,7 @@ static void add_item(struct web *b, int type, const struct cstyle *c, int link, 
     static const struct cstyle none;
     if (!c) c = &none;
     u8 style = (c->bold ? ST_BOLD : 0) | (c->large ? ST_HEADING : 0) | (c->pre ? ST_PRE : 0) |
-               (c->underline ? ST_UNDERLINE : 0) | (c->colored ? ST_COLOR : 0) | (c->italic ? ST_ITALIC : 0) |
+               (c->underline ? ST_UNDERLINE : 0) | (c->colored ? ST_COLOR : 0) | (c->italic ? ST_ITALIC : 0) | (c->mono ? ST_PRE : 0) |
                (c->marker ? ST_MARKER : 0) | (type == IT_RULE ? ST_RULE : 0);
     bool brk = type == IT_BREAK || type == IT_PARA;
     if (brk && b->nitems) {
@@ -350,6 +353,12 @@ static bool parse_color(const char *v, int n, u32 *out)
     }
     for (unsigned i = 0; i < sizeof named_colors / sizeof named_colors[0]; i++)
         if (ci_equal(v, n, named_colors[i].name)) { *out = named_colors[i].rgb; return true; }
+    if (n == 6) {                                   /* old pages: bgcolor="FFFFFF" */
+        u32 h = 0;
+        for (int i = 0; i < 6; i++) { int d = hex_digit(v[i]); if (d < 0) return false; h = h * 16 + d; }
+        *out = h;
+        return true;
+    }
     return false;
 }
 
@@ -666,6 +675,29 @@ static void tag_attrs(const char *q, const char *e, char *href, char *cls, char 
     }
 }
 
+/* Attributes from before CSS: <font color size>, align=, <body bgcolor text link>. */
+static void legacy_attrs(struct web *b, struct cstyle *c, const char *tag, const char *q, const char *e)
+{
+    char v[40];
+    u32 col;
+    if (!strcmp(tag, "font")) {
+        if (get_attr(q, e, "color", v, sizeof v) && parse_color(v, strlen(v), &col)) { c->color = col; c->colored = 1; }
+        if (get_attr(q, e, "size", v, sizeof v)) {
+            int n = v[0] == '+' ? 3 + atoi(v + 1) : v[0] == '-' ? 3 - atoi(v + 1) : atoi(v);
+            c->large = n >= 4;
+        }
+    } else if (!strcmp(tag, "body")) {
+        if (get_attr(q, e, "bgcolor", v, sizeof v) && parse_color(v, strlen(v), &col)) { b->bgcolor = col; b->has_bg = true; }
+        if (get_attr(q, e, "text", v, sizeof v) && parse_color(v, strlen(v), &col)) { c->color = col; c->colored = 1; }
+        if (get_attr(q, e, "link", v, sizeof v) && parse_color(v, strlen(v), &col)) { b->linkcolor = col; b->has_link = true; }
+    }
+    if (strcmp(tag, "img") && get_attr(q, e, "align", v, sizeof v)) {
+        if (!strcasecmp(v, "center") || !strcasecmp(v, "middle")) c->align = 1;
+        else if (!strcasecmp(v, "right")) c->align = 2;
+        else if (!strcasecmp(v, "left")) c->align = 0;
+    }
+}
+
 /* The style of an element: its parent's style, then the tag's defaults,
  * then the matching stylesheet rules, then its style attribute. */
 static void element_style(struct web *b, struct cstyle *c, const char *tag, const char *idv, const char *cls, const char *inl)
@@ -676,6 +708,9 @@ static void element_style(struct web *b, struct cstyle *c, const char *tag, cons
     else if (!strcmp(tag, "pre")) c->pre = 1;
     else if (!strcmp(tag, "u") || !strcmp(tag, "ins")) c->underline = 1;
     else if (!strcmp(tag, "center")) c->align = 1;
+    else if (!strcmp(tag, "tt") || !strcmp(tag, "code") || !strcmp(tag, "kbd") || !strcmp(tag, "samp")) c->mono = 1;
+    else if (!strcmp(tag, "big")) c->large = 1;
+    else if (!strcmp(tag, "th")) { c->bold = 1; c->align = 1; }
     else if (!strcmp(tag, "i") || !strcmp(tag, "em") || !strcmp(tag, "cite") || !strcmp(tag, "var") ||
              !strcmp(tag, "dfn") || !strcmp(tag, "address")) c->italic = 1;
     else if (!strcmp(tag, "ul") || !strcmp(tag, "ol") || !strcmp(tag, "menu") || !strcmp(tag, "dir") ||
@@ -749,6 +784,20 @@ static void add_image(struct web *b, const struct cstyle *c, int link, const cha
     b->items[b->nitems - 1].image = (i16)idx;
 }
 
+/* where the parser is in a <table>: item indices of the table, the open row and the open cell */
+struct tstate { int table, row, cell; };
+
+static void close_cell(struct web *b, struct tstate *t)
+{
+    if (t->cell >= 0) { b->items[t->cell].off = b->nitems; t->cell = -1; }
+}
+
+static void close_row(struct web *b, struct tstate *t)
+{
+    close_cell(b, t);
+    if (t->row >= 0) { b->items[t->row].off = b->nitems; t->row = -1; }
+}
+
 static bool block_tag(const char *t)
 {
     static const char *names[] = { "p", "div", "ul", "ol", "li", "table", "tr", "td", "th", "section", "article", "header",
@@ -777,6 +826,8 @@ static void parse_html(struct web *b, const char *h, bool plain)
     int link = -1, skip = 0;               /* skip > 0 while inside script/noscript */
     int olcount[MAXDEPTH];                 /* the last number used by each open <ol> */
     int cur_form = -1;                     /* the <form> being read */
+    struct tstate ts[6];                   /* the open tables, innermost last */
+    int tdepth = 0;
     memset(olcount, 0, sizeof olcount);
     char word[256];
     int wl = 0;
@@ -840,13 +891,25 @@ static void parse_html(struct web *b, const char *h, bool plain)
                         add_item(b, depth > 0 && !strcmp(stag[depth - 1], "li") ? IT_BREAK : IT_PARA, cur, -1, NULL, 0, false);
                     if (!strcmp(tag, "a")) link = -1;
                     if (!strcmp(tag, "form")) cur_form = -1;
-                    if ((!strcmp(tag, "td") || !strcmp(tag, "th")) && !cur->hidden) add_item(b, IT_GAP, cur, -1, NULL, 0, false);
+                }
+                if (tdepth > 0) {                                   /* end of a cell, row or table */
+                    struct tstate *t = &ts[tdepth - 1];
+                    if (!strcmp(tag, "td") || !strcmp(tag, "th")) close_cell(b, t);
+                    else if (!strcmp(tag, "tr")) close_row(b, t);
+                    else if (!strcmp(tag, "table")) {
+                        close_row(b, t);
+                        struct cstyle cs = *cur;
+                        cs.colored = 0;
+                        add_item(b, IT_TBL_END, &cs, -1, NULL, 0, false);
+                        b->items[t->table].off = b->nitems - 1;
+                        tdepth--;
+                    }
                 }
                 if (!strcmp(tag, "a") && i < 0) link = -1;
             } else {
                 bool hidden = cur->hidden;
                 if (!hidden) {
-                    if (!strcmp(tag, "br") || !strcmp(tag, "tr")) add_item(b, IT_BREAK, cur, -1, NULL, 0, false);
+                    if (!strcmp(tag, "br") || (!strcmp(tag, "tr") && tdepth == 0)) add_item(b, IT_BREAK, cur, -1, NULL, 0, false);
                     else if (!strcmp(tag, "hr")) {
                         add_item(b, IT_PARA, cur, -1, NULL, 0, false);
                         add_item(b, IT_RULE, cur, -1, NULL, 0, false);
@@ -885,10 +948,47 @@ static void parse_html(struct web *b, const char *h, bool plain)
                     add_input(b, cur, cur_form, q, e);
                 } else if (!hidden && !strcmp(tag, "img")) {
                     add_image(b, cur, link, q, e);
+                } else if (!hidden && tdepth < 6 && !strcmp(tag, "table")) {
+                    struct cstyle cs = *cur;
+                    cs.colored = 0;
+                    cs.marker = 0;
+                    cs.color = 0;                           /* .color of a table item is its width in percent */
+                    char v[24];
+                    add_item(b, IT_TBL_BEGIN, &cs, -1, NULL, 0, false);
+                    struct item *tb = &b->items[b->nitems - 1];
+                    tb->off = 0;
+                    if (get_attr(q, e, "border", v, sizeof v)) tb->glue = v[0] ? (u8)MAX(0, MIN(atoi(v), 9)) : 1;
+                    if (get_attr(q, e, "width", v, sizeof v)) {
+                        if (strchr(v, '%')) tb->color = (u32)MAX(1, MIN(atoi(v), 100));
+                        else tb->len = (u32)MAX(0, MIN(atoi(v), 4096));
+                    }
+                    ts[tdepth++] = (struct tstate){ b->nitems - 1, -1, -1 };
+                } else if (!hidden && tdepth > 0 && (!strcmp(tag, "tr") || !strcmp(tag, "td") || !strcmp(tag, "th"))) {
+                    struct tstate *t = &ts[tdepth - 1];
+                    struct cstyle cs = *cur;
+                    cs.colored = 0;
+                    cs.marker = 0;
+                    if (!strcmp(tag, "tr")) {
+                        close_row(b, t);
+                        add_item(b, IT_ROW, &cs, -1, NULL, 0, false);
+                        t->row = b->nitems - 1;
+                    } else {
+                        close_cell(b, t);
+                        if (t->row < 0) { add_item(b, IT_ROW, &cs, -1, NULL, 0, false); t->row = b->nitems - 1; }   /* a cell without <tr> */
+                        char v[24];
+                        u32 bg;
+                        if (get_attr(q, e, "bgcolor", v, sizeof v) && parse_color(v, strlen(v), &bg)) { cs.color = bg; cs.colored = 1; }
+                        add_item(b, IT_CELL, &cs, -1, NULL, 0, false);
+                        struct item *cl = &b->items[b->nitems - 1];
+                        cl->off = 0;
+                        cl->len = (u32)(get_attr(q, e, "colspan", v, sizeof v) ? MAX(1, MIN(atoi(v), 8)) : 1);
+                        t->cell = b->nitems - 1;
+                    }
                 }
                 if (!void_tag(tag) && depth < MAXDEPTH) {
                     stack[depth] = *cur;
                     element_style(b, &stack[depth], tag, idv, cls, inl);
+                    legacy_attrs(b, &stack[depth], tag, q, e);
                     if (!hidden && stack[depth].hidden) stack[depth].hidden = 1;
                     if (hidden) stack[depth].hidden = 1;                /* hidden inherits */
                     strlcpy(stag[depth], tag, sizeof stag[depth]);
@@ -947,29 +1047,13 @@ static int word_w(struct web *b, struct item *it)
     return gfx_ui_face_width(tmp, style_face(it->style));
 }
 
-/* Centres or right-aligns each visual line (a run of runs with the same line number). */
-static void align_lines(struct web *b, int width)
-{
-    int i = 0;
-    while (i < b->nruns) {
-        int line = b->runs[i].line, end = 0, j = i;
-        for (; j < b->nruns && b->runs[j].line == line; j++) end = MAX(end, b->runs[j].x + b->runs[j].w);
-        int free = width - end;
-        if (b->runs[i].align && free > 0) {
-            int dx = b->runs[i].align == 1 ? free / 2 : free;
-            for (int k = i; k < j; k++) b->runs[k].x += dx;
-        }
-        i = j;
-    }
-}
-
 static struct run *new_run(struct web *b, int x, int line, int w, const struct item *it)
 {
     if (b->nruns == b->rcap) { b->rcap = b->rcap ? b->rcap * 2 : 512; b->runs = krealloc(b->runs, b->rcap * sizeof *b->runs); }
     struct run *r = &b->runs[b->nruns++];
     r->x = x; r->line = line; r->w = w;
     r->off = it->off; r->len = it->len; r->style = it->style; r->align = it->align;
-    r->link = it->link; r->color = it->color; r->field = it->field; r->image = it->image; r->h = 0;
+    r->link = it->link; r->color = it->color; r->field = it->field; r->image = it->image; r->h = 0; r->kind = RK_TEXT;
     return r;
 }
 
@@ -994,25 +1078,174 @@ static int field_w(const struct field *f, int width)
     return MAX(100, MIN(f->size * 8 + 8, width));
 }
 
-static void layout(window_t *w)
+/* ---- tables --------------------------------------------------------------
+ * The parser leaves IT_TBL_BEGIN, IT_ROW, IT_CELL and IT_TBL_END items; a TBL_BEGIN and a
+ * CELL hold (in .off) the index where they end.  Each column is as wide as its widest cell
+ * wants (all of it on one line) when that fits, else it shrinks towards its longest word.
+ * Every cell is laid out as its own flow, side by side; a row is as tall as its tallest cell. */
+#define MAXCOLS 16
+#define CELL_PAD 4
+
+struct tcols { int n, min[MAXCOLS], max[MAXCOLS]; };
+
+static int flow(struct web *b, int i0, int i1, int xoff, int width, int line0, int ind0, int depth);
+static int table_layout(struct web *b, int ti, int xoff, int avail, int line0, int depth);
+
+/* the narrowest (longest word) and widest (everything on one line) a run of items can be */
+static void table_cols(struct web *b, int ti, struct tcols *t, int depth);
+static void measure(struct web *b, int i0, int i1, int ind0, int depth, int *minw, int *maxw)
 {
-    struct web *b = w->app;
-    int width = b->content.w - 2 * MARGIN - 16;
-    if (width == b->laid_w) return;
-    b->laid_w = width;
-    b->nruns = 0;
-    int x = 0, line = 0, space = gfx_ui_width(" ");
+    int space = gfx_ui_width(" "), cur = 0, mn = 0, mx = 0;
+    bool first = true;
+    for (int i = i0; i < i1; i++) {
+        struct item *it = &b->items[i];
+        int base = MAX(0, it->indent - ind0) * INDENT_PX;
+        if (it->type == IT_BREAK || it->type == IT_PARA || it->type == IT_RULE || it->type == IT_ROW) { mx = MAX(mx, cur); cur = 0; first = true; continue; }
+        if (it->type == IT_GAP || it->type == IT_CELL || it->type == IT_TBL_END) continue;
+        if (it->type == IT_TBL_BEGIN) {
+            mx = MAX(mx, cur);
+            cur = 0;
+            first = true;
+            if (depth < 5) {
+                struct tcols tc;
+                table_cols(b, i, &tc, depth + 1);
+                int sn = 1, sx = 1;
+                for (int c = 0; c < tc.n; c++) { sn += tc.min[c]; sx += tc.max[c]; }
+                mn = MAX(mn, sn + base);
+                mx = MAX(mx, sx + base);
+            }
+            i = it->off ? (int)it->off : i1;
+            continue;
+        }
+        int w;
+        if (it->type == IT_IMAGE) { int iw, ih; image_size(&b->images[it->image], 4096, &iw, &ih); w = iw; }
+        else if (it->type == IT_INPUT) w = field_w(&b->fields[it->field], 4096);
+        else w = word_w(b, it);
+        mn = MAX(mn, w + base);
+        int gap = first ? 0 : (it->glue ? 0 : space);
+        cur = (first ? base : cur) + gap + w;
+        first = false;
+    }
+    *minw = mn;
+    *maxw = MAX(mx, cur);
+}
+
+static void table_cols(struct web *b, int ti, struct tcols *t, int depth)
+{
+    int tend = b->items[ti].off ? (int)b->items[ti].off : b->nitems, col = 0;
+    memset(t, 0, sizeof *t);
+    for (int k = ti + 1; k < tend;) {
+        struct item *it = &b->items[k];
+        if (it->type == IT_ROW) { col = 0; k++; continue; }
+        if (it->type != IT_CELL) { k++; continue; }
+        int cend = it->off ? MIN((int)it->off, tend) : tend, span = MAX(1, MIN((int)it->len, 8)), mn, mx;
+        measure(b, k + 1, cend, it->indent, depth, &mn, &mx);
+        mn += 2 * CELL_PAD + 1;
+        mx += 2 * CELL_PAD + 1;
+        for (int sp = 0; sp < span && col + sp < MAXCOLS; sp++) {
+            t->min[col + sp] = MAX(t->min[col + sp], mn / span);
+            t->max[col + sp] = MAX(t->max[col + sp], mx / span);
+        }
+        col = MIN(col + span, MAXCOLS);
+        t->n = MAX(t->n, col);
+        k = MAX(cend, k + 1);
+    }
+}
+
+/* Lays the table out in a box avail wide at line0; returns the lines it takes. */
+static int table_layout(struct web *b, int ti, int xoff, int avail, int line0, int depth)
+{
+    struct item *tb = &b->items[ti];
+    int tend = tb->off ? (int)tb->off : b->nitems;
+    u8 align = tb->align, border = tb->glue;
+    u32 declared_px = tb->len, declared_pct = tb->color;
+    struct tcols tc;
+    table_cols(b, ti, &tc, depth);
+    if (!tc.n) return 0;
+    int sum_min = 1, sum_max = 1, sm = 0;
+    for (int c = 0; c < tc.n; c++) { sum_min += tc.min[c]; sum_max += tc.max[c]; sm += tc.max[c]; }
+    int target = sum_max;
+    if (declared_px) target = MAX(target, (int)declared_px);
+    if (declared_pct) target = MAX(target, avail * (int)declared_pct / 100);
+    target = MIN(target, avail);
+    if (target < sum_min) target = sum_min;                 /* never narrower than the longest words */
+    int cw[MAXCOLS], total = 1;
+    for (int c = 0; c < tc.n; c++) {
+        if (target >= sum_max) cw[c] = tc.max[c] + (sm ? (target - sum_max) * tc.max[c] / sm : 0);
+        else cw[c] = tc.min[c] + (sum_max > sum_min ? (tc.max[c] - tc.min[c]) * (target - sum_min) / (sum_max - sum_min) : 0);
+        total += cw[c];
+    }
+    int tx = xoff;
+    if (align == 1) tx += MAX(0, (avail - total) / 2);
+    else if (align == 2) tx += MAX(0, avail - total);
+
+    int line = line0, col = 0, rowlines = 0, nrr = 0, rowrects[MAXCOLS];
+#define FINISH_ROW() do { \
+        for (int q = 0; q < nrr; q++) b->runs[rowrects[q]].h = MAX(1, rowlines) * LINE_H; \
+        if (nrr) line += MAX(1, rowlines); \
+        nrr = 0; rowlines = 0; col = 0; } while (0)
+    for (int k = ti + 1; k < tend;) {
+        struct item *it = &b->items[k];
+        if (it->type == IT_ROW) { FINISH_ROW(); k++; continue; }
+        if (it->type != IT_CELL) { k++; continue; }
+        int cend = it->off ? MIN((int)it->off, tend) : tend, span = MAX(1, MIN((int)it->len, 8)), w = 0, x0 = tx + 1;
+        for (int c = 0; c < col && c < tc.n; c++) x0 += cw[c];
+        for (int sp = 0; sp < span && col + sp < tc.n; sp++) w += cw[col + sp];
+        if (nrr < MAXCOLS) {
+            rowrects[nrr++] = b->nruns;
+            struct run *r = new_run(b, x0, line, w, it);
+            r->kind = RK_RECT;
+            r->align = border ? 1 : 0;
+        }
+        int used = flow(b, k + 1, cend, x0 + CELL_PAD, MAX(8, w - 2 * CELL_PAD), line, it->indent, depth + 1);
+        rowlines = MAX(rowlines, used);
+        col = MIN(col + span, tc.n);
+        k = MAX(cend, k + 1);
+    }
+    FINISH_ROW();
+#undef FINISH_ROW
+    return line - line0;
+}
+
+/* Centres or right-aligns the runs placed on the line just finished (those from r0 on). */
+static void end_line(struct web *b, int r0, int xoff, int width)
+{
+    if (r0 >= b->nruns) return;
+    int end = 0;
+    for (int k = r0; k < b->nruns; k++) end = MAX(end, b->runs[k].x - xoff + b->runs[k].w);
+    int room = width - end;
+    if (b->runs[r0].align && room > 0) {
+        int dx = b->runs[r0].align == 1 ? room / 2 : room;
+        for (int k = r0; k < b->nruns; k++) b->runs[k].x += dx;
+    }
+}
+
+/* Lays out items [i0, i1) as running text in a box xoff..xoff+width, from line0 on; ind0 is
+ * the list indentation the box itself sits at.  Returns the number of lines used. */
+static int flow(struct web *b, int i0, int i1, int xoff, int width, int line0, int ind0, int depth)
+{
+    int x = 0, line = line0, space = gfx_ui_width(" "), extra = 0, lr0 = b->nruns;
     bool first = true;                              /* nothing placed on this line yet */
     bool after_marker = false;
-    int extra = 0;                                  /* lines the tallest picture on this line takes beyond the first */
-#define NEWLINE(n) do { line += (n) + extra; extra = 0; } while (0)
-    for (int i = 0; i < b->nitems; i++) {
+#define NEWLINE(n) do { end_line(b, lr0, xoff, width); line += (n) + extra; extra = 0; lr0 = b->nruns; } while (0)
+    for (int i = i0; i < i1; i++) {
         struct item *it = &b->items[i];
-        int base = it->indent * INDENT_PX;          /* where lines of this block start */
-        if (it->type == IT_BREAK) { NEWLINE(1); first = true; continue; }
+        int base = MAX(0, it->indent - ind0) * INDENT_PX;      /* where lines of this block start */
+        if (it->type == IT_BREAK || it->type == IT_ROW) { NEWLINE(1); first = true; continue; }
         if (it->type == IT_PARA) { NEWLINE(2); first = true; continue; }
-        if (it->type == IT_RULE) { new_run(b, base, line, MAX(0, width - base), it); NEWLINE(1); first = true; continue; }
-        if (it->type == IT_GAP) { if (!first) x += 16; continue; }       /* between table cells */
+        if (it->type == IT_RULE) { new_run(b, xoff + base, line, MAX(0, width - base), it); NEWLINE(1); first = true; continue; }
+        if (it->type == IT_GAP) { if (!first) x += 16; continue; }
+        if (it->type == IT_CELL || it->type == IT_TBL_END) continue;
+        if (it->type == IT_TBL_BEGIN) {
+            if (depth >= 6) continue;                   /* too deep: its cells flow as plain text */
+            if (!first) { NEWLINE(1); first = true; }
+            line += table_layout(b, i, xoff + base, MAX(20, width - base), line, depth);
+            extra = 0;
+            first = true;
+            lr0 = b->nruns;
+            i = it->off ? (int)it->off : i1;
+            continue;
+        }
         if (it->type == IT_IMAGE) {
             int iw, ih;
             image_size(&b->images[it->image], MAX(40, width - base), &iw, &ih);
@@ -1020,7 +1253,7 @@ static void layout(window_t *w)
             if (first) x = base;
             else if (x + igap + iw > width) { NEWLINE(1); x = base; igap = 0; }
             x += igap;
-            new_run(b, x, line, iw, it)->h = ih;
+            new_run(b, xoff + x, line, iw, it)->h = ih;
             x += iw;
             first = false;
             after_marker = false;
@@ -1033,7 +1266,7 @@ static void layout(window_t *w)
             if (first) x = base;
             else if (x + fgap + fw > width) { NEWLINE(1); x = base; fgap = 0; }
             x += fgap;
-            new_run(b, x, line, fw, it);
+            new_run(b, xoff + x, line, fw, it);
             x += fw;
             first = false;
             after_marker = false;
@@ -1042,9 +1275,9 @@ static void layout(window_t *w)
         int ww = word_w(b, it);
         int gap = first ? 0 : (it->glue && !after_marker ? 0 : space);
         after_marker = false;
-        if (it->style & ST_MARKER) {                /* a bullet or number hangs left of the text */
+        if (it->style & ST_MARKER) {                    /* a bullet or number hangs left of the text */
             x = MAX(0, base - ww - 6);
-            new_run(b, x, line, ww, it);
+            new_run(b, xoff + x, line, ww, it);
             x = base - space;
             first = false;
             after_marker = true;
@@ -1053,12 +1286,23 @@ static void layout(window_t *w)
         if (first) x = base;
         else if (x + gap + ww > width) { NEWLINE(1); x = base; gap = 0; }
         x += gap;
-        new_run(b, x, line, ww, it);
+        new_run(b, xoff + x, line, ww, it);
         x += ww;
         first = false;
     }
-    align_lines(b, width);
-    b->nlines = line + 1 + extra;
+    end_line(b, lr0, xoff, width);
+#undef NEWLINE
+    return first ? line - line0 : line - line0 + 1 + extra;
+}
+
+static void layout(window_t *w)
+{
+    struct web *b = w->app;
+    int width = b->content.w - 2 * MARGIN - 16;
+    if (width == b->laid_w) return;
+    b->laid_w = width;
+    b->nruns = 0;
+    b->nlines = MAX(1, flow(b, 0, b->nitems, 0, width, 0, 0, 0));
 }
 
 static int vis_lines(struct web *b) { return MAX(1, (b->content.h - 2 * MARGIN) / LINE_H); }
@@ -1103,15 +1347,20 @@ static void paint(window_t *w)
     ui_button(s, b->b_go, b->job ? "..." : "Go", BTN_NORMAL);
     tf_draw(s, rect_make(42, 5, s->w - 98, 26), &b->addr, b->addr_focus);
     rect_t c = b->content;
-    gfx_fill_rect(s, c.x, c.y, c.w, c.h, 0xFFFFFF);
+    gfx_fill_rect(s, c.x, c.y, c.w, c.h, b->has_bg ? b->bgcolor : 0xFFFFFF);
     rect_t old = s->clip;
     gfx_set_clip(s, rect_make(c.x, c.y, c.w - 16, c.h));
     int first = b->scroll, last = b->scroll + vis_lines(b) + 1;
     for (int i = 0; i < b->nruns; i++) {
         struct run *r = &b->runs[i];
-        int nl = r->image >= 0 ? (r->h + LINE_H - 1) / LINE_H : 1;
+        int nl = (r->image >= 0 || r->kind == RK_RECT) ? (r->h + LINE_H - 1) / LINE_H : 1;
         if (r->line > last || r->line + nl <= first) continue;
         int x = c.x + MARGIN + r->x, y = c.y + MARGIN + (r->line - first) * LINE_H;
+        if (r->kind == RK_RECT) {                       /* a table cell: background and border */
+            if (r->style & ST_COLOR) gfx_fill_rect(s, x, y, r->w, r->h, r->color);
+            if (r->align) gfx_rect(s, x, y, r->w, r->h, RGB(120, 120, 130));
+            continue;
+        }
         if (r->style & ST_RULE) {                       /* <hr> */
             gfx_hline(s, x, y + 8, r->w, RGB(140, 140, 150));
             gfx_hline(s, x, y + 9, r->w, RGB(235, 235, 240));
@@ -1123,7 +1372,7 @@ static void paint(window_t *w)
         memcpy(tmp, b->text + r->off, r->len);
         tmp[r->len] = 0;
         /* a CSS colour wins; links are blue (red while hovered) and text is black */
-        u32 col = (r->style & ST_COLOR) ? r->color : r->link >= 0 ? (r->link == b->hover_link ? RGB(200, 40, 40) : RGB(20, 70, 200)) : C_TEXT;
+        u32 col = (r->style & ST_COLOR) ? r->color : r->link >= 0 ? (r->link == b->hover_link ? RGB(200, 40, 40) : b->has_link ? b->linkcolor : RGB(20, 70, 200)) : C_TEXT;
         int face = style_face(r->style), tw, fh = gfx_ui_face_height(face);
         if (r->style & ST_PRE) { tw = gfx_text(s, x, y, tmp, col, COLOR_NONE); fh = FONT_H; }
         else if (r->style & ST_ITALIC) tw = gfx_ui_face_text_italic(s, x, y, tmp, face, col);
