@@ -77,6 +77,13 @@ int  gfx_ui_width_n(const char *str, int n);
 void gfx_ui_text_ellipsis(surface_t *s, int x, int y, const char *str, int max_w, u32 fg);
 void gfx_ui_centered(surface_t *s, rect_t r, const char *str, u32 fg);
 
+/* Explicit faces, for the browser: body text, bold, and 20 px headings. */
+enum { UI_FACE_REG, UI_FACE_BOLD, UI_FACE_LARGE, UI_FACE_LARGE_BOLD, UI_FACE_COUNT };
+int  gfx_ui_face_text(surface_t *s, int x, int y, const char *str, int face, u32 fg);
+int  gfx_ui_face_width(const char *str, int face);
+int  gfx_ui_face_height(int face);
+int  gfx_ui_face_ascent(int face);
+
 u32 color_blend(u32 a, u32 b, int alpha);   /* alpha of b over a, 0..255 */
 u32 color_lighten(u32 c, int amount);
 u32 color_darken(u32 c, int amount);

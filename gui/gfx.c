@@ -383,6 +383,31 @@ int gfx_ui_width_n(const char *str, int n)
 
 int gfx_ui_width(const char *str) { return gfx_ui_width_n(str, 0x7FFFFFFF); }
 
+static const struct ui_face *ui_face_of(int face)
+{
+    static const struct ui_face *faces[UI_FACE_COUNT] = { &ui_face_regular, &ui_face_bold, &ui_face_large, &ui_face_large_bold };
+    return faces[face < 0 || face >= UI_FACE_COUNT ? 0 : face];
+}
+
+int gfx_ui_face_text(surface_t *s, int x, int y, const char *str, int face, u32 fg)
+{
+    const struct ui_face *f = ui_face_of(face);
+    int x0 = x;
+    for (; *str; str++) x += *str == '\t' ? 16 : ui_char(s, f, x, y, (unsigned char)*str, fg);
+    return x - x0;
+}
+
+int gfx_ui_face_width(const char *str, int face)
+{
+    const struct ui_face *f = ui_face_of(face);
+    int w = 0;
+    for (; *str; str++) w += *str == '\t' ? 16 : ui_glyph(f, (unsigned char)*str)->adv;
+    return w;
+}
+
+int gfx_ui_face_height(int face) { return ui_face_of(face)->height; }
+int gfx_ui_face_ascent(int face) { return ui_face_of(face)->ascent; }
+
 void gfx_ui_text_ellipsis(surface_t *s, int x, int y, const char *str, int max_w, u32 fg)
 {
     if (gfx_ui_width(str) <= max_w) { gfx_ui_text(s, x, y, str, fg); return; }
