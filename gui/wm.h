@@ -68,6 +68,7 @@ window_t *wm_create(const char *title, int icon, int client_w, int client_h, int
 void      wm_destroy_window(window_t *w);
 void      wm_close(window_t *w);                 /* sends EV_CLOSE */
 void      wm_set_modal(window_t *owner, window_t *dialog);
+void      wm_post_key(window_t *w, struct key_event *ke);   /* deliver a key press to w */
 
 /* geometry / state */
 rect_t    wm_client_rect(window_t *w);           /* in screen coordinates */
