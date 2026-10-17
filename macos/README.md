@@ -63,3 +63,17 @@ Mounting, as tested on macOS 27 (M4):
        mkdir -p ~/nimbus-mount
        mount -F -t nimbusfs /dev/diskNs1 ~/nimbus-mount
        umount ~/nimbus-mount && hdiutil detach /dev/diskN
+
+## Icons
+
+`macos/icon/NimbusFS.icns` / `NimbusFS-icon.png` are a placeholder NimbusOS cloud; replace them with the real logo
+(keep the file names).
+
+**Mounted disk icon (experimental).** Put the icon into the image, and add `NimbusVolumeIcon.swift` to the extension
+target (it serves the Finder "custom icon" flag on the root folder):
+
+    nfstool put ~/nimbus-test.img macos/icon/NimbusFS.icns /.VolumeIcon.icns
+
+**Icon for the image file.** Declare a document type in the app target (Info tab > Document Types: name `NimbusFS Disk Image`,
+role Viewer, UTI `com.aaron.garsia.nimbusfs.image`; Exported Type Identifiers: same UTI, conforms to `public.disk-image`,
+extension `nimg`), and give it the `NimbusFS.icns` file as the icon. Then name images `*.nimg`.
