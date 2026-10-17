@@ -66,8 +66,8 @@ Mounting, as tested on macOS 27 (M4):
 
 ## Icons
 
-`macos/icon/NimbusFS.icns` / `NimbusFS-icon.png` are a placeholder NimbusOS cloud; replace them with the real logo
-(keep the file names).
+`macos/icon/NimbusFS.icns` / `NimbusFS-icon.png` are the NimbusOS logo (cloud, N and sun on hills)
+
 
 **Mounted disk icon (experimental).** Put the icon into the image, and add `NimbusVolumeIcon.swift` to the extension
 target (it serves the Finder "custom icon" flag on the root folder):
