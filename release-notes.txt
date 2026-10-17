@@ -1,3 +1,4 @@
+Nimbus Update: "What's new" is now a scrollable box (mouse wheel, scroll bar, arrow keys, Page Up/Down) with wrapped lines, so long release notes can be read in full
 # One line per note; shown on the download page and in Nimbus Update. Lines starting with # are ignored.
 Web Browser: tables with real columns, borders, cell colours and nested tables, so old-style pages lay out properly
 Web Browser: pictures (PNG, GIF and JPEG) load after the page, scaled to fit, and picture links work

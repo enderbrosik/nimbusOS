@@ -18,10 +18,34 @@
 
 struct upd_app {
     struct update *u;
-    rect_t check_btn, install_btn, restart_btn;
+    rect_t check_btn, install_btn, restart_btn, box;
+    int scroll, nlines, vis;
+    bool dragging;
 };
 
+#define CLAMP(v, lo, hi) ((v) < (lo) ? (lo) : (v) > (hi) ? (hi) : (v))
 static window_t *upd_win;
+
+/* Cuts the next display line off a note: as many words as fit in max_w pixels.
+ * Returns the characters used from n[0..len). */
+static int wrap_line(const char *n, int len, int max_w, char *out, int outmax)
+{
+    int used = 0, last_sp = -1;
+    for (int i = 0; i < len && i < outmax - 1; i++) {
+        out[i] = n[i]; out[i + 1] = 0;
+        if (n[i] == ' ') last_sp = i;
+        if (gfx_ui_face_width(out, 0) > max_w) {
+            int cut = last_sp > 0 ? last_sp : (i > 0 ? i : 1);
+            out[cut] = 0;
+            used = cut;
+            while (used < len && n[used] == ' ') used++;
+            return used;
+        }
+    }
+    memcpy(out, n, MIN(len, outmax - 1));
+    out[MIN(len, outmax - 1)] = 0;
+    return len;
+}
 
 static void paint(window_t *w)
 {
@@ -55,16 +79,46 @@ static void paint(window_t *w)
         snprintf(b, sizeof b, "What's new in %s:", update_new_version(a->u));
         gfx_ui_text_bold(s, 20, y, b, C_TEXT);
         y += 22;
-        const char *n = update_notes(a->u);
-        while (*n && y < s->h - 70) {
-            const char *nl = strchr(n, '\n');
-            int len = nl ? (int)(nl - n) : (int)strlen(n);
-            char line[200];
-            snprintf(line, sizeof line, "\x07 %.*s", MIN(len, 190), n);
-            gfx_ui_text_ellipsis(s, 28, y, line, s->w - 56, C_TEXT);
-            y += 20;
-            n += len + (nl ? 1 : 0);
+        /* the notes sit in a scrollable box, like the terms box of an installer */
+        a->box = rect_make(20, y, s->w - 40, s->h - 70 - y);
+        a->vis = MAX(1, (a->box.h - 8) / 20);
+        int tw = a->box.w - 44, total = 0, ly = a->box.y + 6;
+        rect_t old = s->clip;
+        gfx_set_clip(s, rect_make(a->box.x + 2, a->box.y + 2, a->box.w - 20, a->box.h - 4));
+        /* two passes over the same wrapping: count the display lines, then draw those in view */
+        for (int pass = 0; pass < 2; pass++) {
+            if (pass == 1) {
+                a->nlines = total;
+                a->scroll = CLAMP(a->scroll, 0, MAX(0, total - a->vis));
+                s->clip = old;
+                ui_sunken(s, a->box, 0xFFFFFF);
+                gfx_set_clip(s, rect_make(a->box.x + 2, a->box.y + 2, a->box.w - 20, a->box.h - 4));
+                total = 0;
+            }
+            for (const char *n = update_notes(a->u); *n; ) {
+                const char *nl = strchr(n, '\n');
+                int len = nl ? (int)(nl - n) : (int)strlen(n);
+                const char *p = n;
+                bool first = true;
+                do {
+                    char line[200];
+                    int used = wrap_line(p, len - (int)(p - n), tw, line, sizeof line);
+                    if (pass == 1 && total >= a->scroll && ly + 20 <= a->box.y + a->box.h) {
+                        if (first) gfx_fill_rect(s, a->box.x + 10, ly + 7, 5, 5, C_TEXT);
+                        gfx_ui_text(s, a->box.x + 22, ly, line, C_TEXT);
+                        ly += 20;
+                    }
+                    total++;
+                    first = false;
+                    p += used;
+                } while (p < n + len);
+                n += len + (nl ? 1 : 0);
+            }
         }
+        s->clip = old;
+        ui_vscroll(s, rect_make(a->box.x + a->box.w - 17, a->box.y + 1, 16, a->box.h - 2), a->nlines, a->vis, a->scroll);
+    } else {
+        a->box = rect_make(0, 0, 0, 0);
     }
 
     bool busy = ph == UPD_CHECKING || ph == UPD_DOWNLOADING;
@@ -96,7 +150,21 @@ static void on_event(window_t *w, event_t *e)
         paint(w);
         break;
     }
+    case EV_WHEEL: a->scroll = CLAMP(a->scroll - e->wheel * 3, 0, MAX(0, a->nlines - a->vis)); paint(w); break;
+    case EV_MOUSE_UP: a->dragging = false; break;
+    case EV_MOUSE_MOVE:
+        if (a->dragging) {
+            a->scroll = ui_vscroll_offset_for(rect_make(0, a->box.y, 16, a->box.h), a->nlines, a->vis, e->y);
+            paint(w);
+        }
+        break;
     case EV_MOUSE_DOWN: {
+        if (a->box.w && rect_contains(rect_make(a->box.x + a->box.w - 17, a->box.y, 17, a->box.h), e->x, e->y)) {
+            a->dragging = true;
+            a->scroll = ui_vscroll_offset_for(rect_make(0, a->box.y, 16, a->box.h), a->nlines, a->vis, e->y);
+            paint(w);
+            break;
+        }
         enum update_phase ph = update_phase(a->u);
         bool busy = ph == UPD_CHECKING || ph == UPD_DOWNLOADING;
         if (!busy && rect_contains(a->check_btn, e->x, e->y)) { update_check(a->u, false); wm_set_timer(w, 50); }
@@ -106,6 +174,12 @@ static void on_event(window_t *w, event_t *e)
         break;
     }
     case EV_KEY:
+        if (e->key.pressed && (e->key.key == KEY_UP || e->key.key == KEY_DOWN || e->key.key == KEY_PGUP || e->key.key == KEY_PGDN || e->key.key == KEY_HOME || e->key.key == KEY_END)) {
+            int k = e->key.key, d = k == KEY_UP ? -1 : k == KEY_DOWN ? 1 : k == KEY_PGUP ? -a->vis : k == KEY_PGDN ? a->vis : k == KEY_HOME ? -9999 : 9999;
+            a->scroll = CLAMP(a->scroll + d, 0, MAX(0, a->nlines - a->vis));
+            paint(w);
+            break;
+        }
         if (e->key.pressed && e->key.key == KEY_ENTER && update_phase(a->u) == UPD_AVAILABLE) { update_install(a->u); wm_set_timer(w, 50); paint(w); }
         break;
     case EV_CLOSE:

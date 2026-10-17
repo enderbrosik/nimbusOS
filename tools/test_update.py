@@ -86,6 +86,17 @@ try:
         q.wait_serial(r"NimbusOS 0\.2 - booting", 30)
         q.wait_serial(r"Desktop ready", timeout=40)
         q.wait_serial(r"DHCP: address 10\.0\.2\.15", 15)
+        # the GUI app lists what is new in a scroll box: keys and the scroll bar move it
+        q.mouse_home(); q.key("meta_l")
+        for _ in range(13): q.key("down")
+        q.key("ret")
+        q.wait_serial(r'created: "Nimbus Update"', 5)
+        time.sleep(6)
+        q.screenshot(f"{T}/update-notes-top.png")
+        for _ in range(30): q.key("down", delay=0.02)
+        time.sleep(0.5)
+        q.screenshot(f"{T}/update-notes-end.png")
+        q.mouse_home()
         run = terminal_session(q)
         # the tampered servers are the same host on other ports: swap the served folder by port
         out = run("update", r"\[upd \] (signature invalid|NimbusOS 0\.3 is available|Update failed)")
