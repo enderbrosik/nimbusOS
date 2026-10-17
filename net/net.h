@@ -44,6 +44,10 @@ void tcp_close(int s);
  * kmalloc'ed; *status gets the HTTP status code. */
 const char *net_tls_error(void);            /* detail for NET_ETLS */
 const char *http_ua_name(void);             /* current user-agent preset: NimbusOS, Chrome, Edge, ... */
+int http_ua_count(void);
+const char *http_ua_label(int i);
+int http_ua_index(void);
+void http_ua_set(int i);                    /* choose a preset by number (saved in settings) */
 const char *http_ua_next(void);             /* switch to the next preset (saved in settings) */
 const char *http_last_security(void);       /* cipher of the last https request, "" for http */
 int  http_get(const char *url, char **body, u32 *len, int *status, char *final_url, int urlmax);

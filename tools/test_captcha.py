@@ -67,7 +67,7 @@ try:
         q.key("ctrl-l"); time.sleep(0.3); q.type("https://10.0.2.2:8446/\n")
         q.wait_serial(r'loaded https://10\.0\.2\.2:8446/: HTTP 200', 30)
         time.sleep(3.0); q.screenshot(f"{S}/captcha-page.png")
-        q.key("ctrl-u"); time.sleep(0.3)                  # switch to the Chrome preset, then reload the page
+        q.click(817, 137); time.sleep(0.4); q.screenshot(f"{S}/captcha-ualist.png"); q.click(740, 188); time.sleep(0.3)
         q.key("ctrl-l"); time.sleep(0.3); q.type("https://10.0.2.2:8446/\n")
         q.wait_serial(r'loaded https://10\.0\.2\.2:8446/: HTTP 200', 30)
         time.sleep(3.0)

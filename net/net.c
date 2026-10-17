@@ -899,6 +899,10 @@ static void ua_load(void) {
     for (int i = 0; i < UA_N; i++) if (!strcasecmp(n, ua_presets[i].name)) ua_cur = i;
 }
 const char *http_ua_name(void) { ua_load(); return ua_presets[ua_cur].name; }
+int http_ua_count(void) { return UA_N; }
+const char *http_ua_label(int i) { return ua_presets[i].name; }
+int http_ua_index(void) { ua_load(); return ua_cur; }
+void http_ua_set(int i) { ua_load(); if (i >= 0 && i < UA_N) { ua_cur = i; settings_set("user_agent", ua_presets[i].name); } }
 const char *http_ua_next(void) {         /* switches to the next preset and remembers it */
     ua_load();
     ua_cur = (ua_cur + 1) % UA_N;

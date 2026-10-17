@@ -74,7 +74,8 @@ struct web {
     int scroll;                 /* in lines */
     struct netjob *job;
     bool addr_focus;
-    rect_t b_back, b_go, content;
+    rect_t b_back, b_go, b_ua, content;
+    bool ua_open;
     int hover_link;
 };
 
@@ -1374,8 +1375,10 @@ static void paint(window_t *w)
     b->b_back = rect_make(6, 5, 30, 26);
     b->b_go = rect_make(s->w - 50, 5, 44, 26);
     ui_button(s, b->b_back, "<", b->nhist ? BTN_NORMAL : BTN_DISABLED);
+    b->b_ua = rect_make(s->w - 94, 5, 38, 26);
+    ui_button(s, b->b_ua, "UA", BTN_NORMAL);
     ui_button(s, b->b_go, b->job ? "..." : "Go", BTN_NORMAL);
-    tf_draw(s, rect_make(42, 5, s->w - 98, 26), &b->addr, b->addr_focus);
+    tf_draw(s, rect_make(42, 5, s->w - 142, 26), &b->addr, b->addr_focus);
     rect_t c = b->content;
     gfx_fill_rect(s, c.x, c.y, c.w, c.h, b->has_bg ? b->bgcolor : 0xFFFFFF);
     rect_t old = s->clip;
@@ -1417,6 +1420,16 @@ static void paint(window_t *w)
     const char *st = b->status;
     if (b->hover_link >= 0 && b->hover_link < b->nlinks) st = b->links[b->hover_link];
     gfx_ui_text_ellipsis(s, 8, sy + 3, st, s->w - 16, C_TEXT);
+    if (b->ua_open) {                               /* the user-agent list drops down from the UA button */
+        int n = http_ua_count(), x = b->b_ua.x + b->b_ua.w - 130, y = BAR_H - 2;
+        if (x < 2) x = 2;
+        gfx_fill_rect(s, x, y, 130, n * 22 + 4, RGB(250, 250, 252));
+        gfx_rect(s, x, y, 130, n * 22 + 4, RGB(120, 120, 130));
+        for (int i = 0; i < n; i++) {
+            if (i == http_ua_index()) gfx_fill_rect(s, x + 2, y + 2 + i * 22, 126, 22, RGB(200, 220, 250));
+            gfx_ui_text_ellipsis(s, x + 10, y + 5 + i * 22, http_ua_label(i), 112, C_TEXT);
+        }
+    }
     char t[128];
     snprintf(t, sizeof t, "%s - Web Browser", b->title[0] ? b->title : b->url);
     if (strcmp(t, w->title)) wm_set_title(w, t);
@@ -1791,8 +1804,21 @@ static void on_event(window_t *w, event_t *e)
         break;
     }
     case EV_MOUSE_DOWN:
-        b->addr_focus = rect_contains(rect_make(42, 5, w->surface->w - 98, 26), e->x, e->y);
-        if (b->addr_focus) { tf_click(&b->addr, rect_make(42, 5, w->surface->w - 98, 26), e->x); b->focus = -1; }
+        if (b->ua_open) {                           /* pick from the open list, or click elsewhere to close it */
+            int n = http_ua_count(), x = b->b_ua.x + b->b_ua.w - 130, y = BAR_H - 2;
+            if (x < 2) x = 2;
+            b->ua_open = false;
+            if (e->x >= x && e->x < x + 130 && e->y >= y + 2 && e->y < y + 2 + n * 22) {
+                int i = (e->y - y - 2) / 22;
+                http_ua_set(i);
+                snprintf(b->status, sizeof b->status, "Identifying as %s (reload to apply)", http_ua_label(i));
+            }
+            paint(w);
+            break;
+        }
+        if (rect_contains(b->b_ua, e->x, e->y)) { b->ua_open = true; b->addr_focus = false; paint(w); break; }
+        b->addr_focus = rect_contains(rect_make(42, 5, w->surface->w - 142, 26), e->x, e->y);
+        if (b->addr_focus) { tf_click(&b->addr, rect_make(42, 5, w->surface->w - 142, 26), e->x); b->focus = -1; }
         if (rect_contains(b->b_go, e->x, e->y)) { navigate(w, b->addr.text, true); break; }
         if (rect_contains(b->b_back, e->x, e->y) && b->nhist) { char u[256]; strlcpy(u, b->history[--b->nhist], sizeof u); navigate(w, u, false); break; }
         if (rect_contains(rect_make(b->content.x + b->content.w - 16, b->content.y, 16, b->content.h), e->x, e->y)) {
