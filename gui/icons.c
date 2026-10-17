@@ -209,6 +209,16 @@ static void draw_icon(surface_t *s, int id)
             gfx_fill_rect(s, 20 - half, 26 - 9 + r, half * 2 + 1, 1, RGB(230, 70, 80));
         }
         break;
+    case ICON_BREAKOUT:                     /* a ball and paddle under three rows of bricks */
+        gfx_round_rect(s, 1, 1, 30, 30, 4, RGB(22, 26, 40));
+        for (int c = 0; c < 4; c++) {
+            gfx_fill_rect(s, 4 + c * 7, 4, 6, 3, RGB(230, 70, 90));
+            gfx_fill_rect(s, 4 + c * 7, 9, 6, 3, RGB(240, 210, 80));
+            gfx_fill_rect(s, 4 + c * 7, 14, 6, 3, RGB(90, 200, 120));
+        }
+        gfx_round_rect(s, 6, 24, 20, 4, 2, RGB(200, 210, 230));
+        gfx_fill_circle(s, 16, 20, 2, 0xFFFFFF);
+        break;
     case ICON_UPDATE:                       /* green circle with a down arrow (download) */
         gfx_fill_circle(s, 16, 16, 13, RGB(46, 160, 80));
         gfx_circle(s, 16, 16, 13, RGB(24, 110, 50));

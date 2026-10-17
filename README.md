@@ -507,7 +507,9 @@ checks the live CD refuses kernel updates.
 **Games** (Start menu ▸ Games, and on the desktop): Minesweeper (three
 difficulties, first click is always safe, chording), Snake (speeds up as it
 grows, best score saved), Klondike Solitaire (drag cards or double-click to
-send them home; draw 1 or 3).
+send them home; draw 1 or 3), Breakout (mouse, arrow keys or A/D move the
+paddle; three balls per game, each wall cleared is faster, best score saved
+in `/System/breakout.hi`).
 
 **Settings** (Start menu ▸ Settings), stored in `/System/settings.cfg`:
 * Display: 800×600 … 1920×1080, switched live through Bochs DISPI, with a
