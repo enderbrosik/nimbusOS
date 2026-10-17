@@ -7,7 +7,11 @@
  * after every call (except the superblock counters, which are flushed at the
  * end of every mutating public operation).
  */
+#if __has_include("fs/nbfs.h")
 #include "fs/nbfs.h"
+#else
+#include "nbfs.h"        /* flat folder, e.g. inside an Xcode project */
+#endif
 
 #ifdef NIMBUS_KERNEL
 #include "kernel/string.h"
