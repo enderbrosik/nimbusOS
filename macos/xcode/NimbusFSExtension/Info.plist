@@ -29,6 +29,8 @@
 			<dict>
 				<key>FSName</key>
 				<string>NimbusFSExtensionName</string>
+				<key>FSFormatContentMask</key>
+				<string>0x4E</string>
 				<key>FSfileObjectsAreCaseSensitive</key>
 				<false/>
 			</dict>

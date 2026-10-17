@@ -46,10 +46,12 @@ private let cWrite: nbfs_shim_wio = { ctx, lba, count, buf in
 final class NimbusFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
     private var device: BlockDevice?
     private var volume: NimbusVolume?
+    private var lastResource: FSBlockDeviceResource?    // remembered so startFormat knows which device to erase
 
     // Is this device a NimbusFS volume?  (diskutil / mount call this before mounting.)
     func probeResource(resource: FSResource) async throws -> FSProbeResult {
         guard let blk = resource as? FSBlockDeviceResource else { return FSProbeResult.notRecognized }
+        lastResource = blk
         let dev = BlockDevice(blk)
         let r = nbfs_shim_probe(Unmanaged.passUnretained(dev).toOpaque(), cRead, dev.sectors)
         if r == 0 { return FSProbeResult.usable(name: "NimbusFS", containerID: FSContainerIdentifier(uuid: UUID())) }
@@ -58,6 +60,7 @@ final class NimbusFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
 
     func loadResource(resource: FSResource, options: FSTaskOptions) async throws -> FSVolume {
         guard let blk = resource as? FSBlockDeviceResource else { throw fs_errorForPOSIXError(POSIXError.EINVAL.rawValue) }
+        lastResource = blk
         let dev = BlockDevice(blk)
         var err: Int32 = 0
         guard let fs = nbfs_shim_mount(Unmanaged.passUnretained(dev).toOpaque(), cRead, cWrite, dev.sectors, &err) else {
@@ -92,7 +95,22 @@ extension NimbusFileSystem: FSManageableResourceMaintenanceOperations {
         return progress
     }
 
+    // Disk Utility / `diskutil eraseVolume` call this. Label comes from the "-v <name>" option, if any.
     func startFormat(task: FSTask, options: FSTaskOptions) throws -> Progress {
-        throw fs_errorForPOSIXError(POSIXError.ENOTSUP.rawValue)
+        guard let blk = lastResource else { throw fs_errorForPOSIXError(POSIXError.EINVAL.rawValue) }
+        var label = "NimbusFS"
+        let opts = options.taskOptions
+        if let i = opts.firstIndex(of: "-v"), i + 1 < opts.count { label = String(opts[i + 1].prefix(31)) }
+        let dev = BlockDevice(blk)
+        let r = nbfs_shim_format(Unmanaged.passUnretained(dev).toOpaque(), cRead, cWrite, dev.sectors, label, UInt32(Date().timeIntervalSince1970))
+        let progress = Progress(totalUnitCount: 100)
+        if r != 0 {
+            task.logMessage("NimbusFS: format failed: \(String(cString: nbfs_shim_strerror(r)))")
+            throw fs_errorForPOSIXError(POSIXError.EIO.rawValue)
+        }
+        task.logMessage("NimbusFS: formatted \"\(label)\"")
+        progress.completedUnitCount = 100
+        task.didComplete(error: nil)
+        return progress
     }
 }

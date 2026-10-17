@@ -16,6 +16,12 @@ nbfs_t *nbfs_shim_mount(void *ctx, nbfs_shim_io rd, nbfs_shim_wio wr, uint32_t s
 
 void nbfs_shim_close(nbfs_t *fs) { if (fs) { nbfs_sync(fs); free(fs); } }
 
+int nbfs_shim_format(void *ctx, nbfs_shim_io rd, nbfs_shim_wio wr, uint32_t sectors, const char *label, uint32_t now)
+{
+    struct nbfs_blkdev dev = { .ctx = ctx, .read = rd, .write = wr, .sectors = sectors };
+    return nbfs_format(&dev, label, now);
+}
+
 static int no_write(void *ctx, uint32_t lba, uint32_t count, const void *buf) { return -1; }
 
 int nbfs_shim_probe(void *ctx, nbfs_shim_io rd, uint32_t sectors)
