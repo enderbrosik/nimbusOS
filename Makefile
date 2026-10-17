@@ -285,6 +285,7 @@ test-all: test $(IMG)
 	python3 tools/test_paint.py
 	python3 tools/test_stage7.py
 	python3 tools/test_games.py
+	python3 tools/test_calc.py
 	python3 tools/test_polish.py
 	python3 tools/test_sound.py
 	python3 tools/test_iso.py

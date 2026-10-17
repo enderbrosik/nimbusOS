@@ -174,12 +174,14 @@ static void press(struct calc *c, char key)
     }
 }
 
-static char key_for(int key)
+/* Printable keys come translated (Shift+= is '+'), the editing keys by their code. */
+static char key_for(const struct key_event *k)
 {
-    if ((key >= '0' && key <= '9') || key == '.' || key == '+' || key == '-' || key == '*' || key == '/' || key == '%') return (char)key;
-    if (key == '=' || key == KEY_ENTER) return '=';
-    if (key == KEY_BACKSPACE) return 'b';
-    if (key == KEY_ESC) return 'c';
+    char ch = k->ch;
+    if ((ch >= '0' && ch <= '9') || ch == '.' || ch == '+' || ch == '-' || ch == '*' || ch == '/' || ch == '%' || ch == '=') return ch;
+    if (k->key == KEY_ENTER) return '=';
+    if (k->key == KEY_BACKSPACE) return 'b';
+    if (k->key == KEY_ESC) return 'c';
     return 0;
 }
 
@@ -232,7 +234,7 @@ static void on_event(window_t *w, event_t *e)
         }
         break;
     case EV_KEY: {
-        char k = e->key.pressed ? key_for(e->key.key) : 0;
+        char k = e->key.pressed ? key_for(&e->key) : 0;
         if (k) { press(c, k); paint(w); }
         break;
     }
