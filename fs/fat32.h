@@ -6,6 +6,7 @@
 #include "kernel/types.h"
 
 #define FAT_NAME_MAX 255
+#define FAT_USB_DRIVE 4            /* drive number of the USB stick (ATA drives are 0..3) */
 
 struct fat_item {
     char name[FAT_NAME_MAX + 1];
@@ -14,7 +15,7 @@ struct fat_item {
 };
 
 /* Mounts the first FAT32 volume found on an ATA drive that is not the boot disk
- * (a partition of type 0B/0C, or a disk that is one FAT32 volume).  Returns 0 or a negative error. */
+ * (a USB stick, or an ATA drive: a partition of type 0B/0C, or a disk that is one FAT32 volume).  Returns 0 or a negative error. */
 int  fat32_mount(void);
 bool fat32_mounted(void);
 const char *fat32_label(void);

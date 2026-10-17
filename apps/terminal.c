@@ -18,6 +18,7 @@
 #include "drivers/pit.h"
 #include "drivers/rtc.h"
 #include "drivers/ata.h"
+#include "drivers/usb.h"
 #include "kernel/heap.h"
 #include "kernel/pmm.h"
 #include "kernel/task.h"
@@ -558,12 +559,12 @@ static void cmd_fat(struct term *t, int argc, char **argv)
     const char *sub = argc > 1 ? argv[1] : "info";
     if (!fat32_mounted()) {
         int r = fat32_mount();
-        if (r) { fout(C_ERR, "fat: no FAT32 disk found (add a second drive formatted as FAT32)\n"); return; }
+        if (r) { fout(C_ERR, "fat: no FAT32 disk found (plug in a USB stick or add a second drive formatted as FAT32)\n"); return; }
     }
     if (!strcmp(sub, "info")) {
         int drv; u32 total, fr;
         fat32_info(&drv, &total, &fr);
-        fout(C_FG, "FAT32 volume \"%s\" on %s: %u MiB, %u MiB free\n", fat32_label(), g_ata[drv].name, total / 1024, fr / 1024);
+        fout(C_FG, "FAT32 volume \"%s\" on %s: %u MiB, %u MiB free\n", fat32_label(), drv == FAT_USB_DRIVE ? "the USB stick" : g_ata[drv].name, total / 1024, fr / 1024);
     } else if (!strcmp(sub, "ls") || !strcmp(sub, "dir")) {
         struct fat_item *it;
         int n = fat32_list(argc > 2 ? argv[2] : "/", &it);

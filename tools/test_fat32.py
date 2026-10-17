@@ -38,15 +38,21 @@ def make_disk(path, partitioned):
     subprocess.check_call(["mcopy", "-i", t, f"{S}/inner.txt", "::DOCS/inner.txt"])
     return t
 
-def session(name, partitioned):
+def session(name, partitioned, usb=False):
     disk = f"{S}/{name}.img"
     t = make_disk(disk, partitioned)
     sysimg = f"{S}/{name}-sys.img"
     shutil.copy("build/nimbus.img", sysimg)
     open(f"{S}/readme.txt", "w").write("written by the guest\n")
     subprocess.check_call([NFS, "put", sysimg, f"{S}/readme.txt", "/readme.txt"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    with Qemu([sysimg, disk], name="fat-" + name) as q:
+    drives, extra = [sysimg, disk], None
+    if usb:                                                # the same disk, as a USB stick on an xHCI controller
+        drives = [sysimg]
+        extra = ["-device", "qemu-xhci,id=xhci", "-drive", f"if=none,id=usbd,file={disk},format=raw",
+                 "-device", "usb-storage,bus=xhci.0,drive=usbd"]
+    with Qemu(drives, extra=extra, name="fat-" + name) as q:
         q.wait_serial(r"Desktop ready", timeout=40)
+        if usb: assert re.search(r'\[usb \] USB disk ".*", 64 MiB', q.serial()), "USB disk not found"
         q.mouse_home()
         q.double_click(*ic(0, 3))
         q.wait_serial(r'created: "Terminal"', 5)
@@ -59,7 +65,7 @@ def session(name, partitioned):
                 time.sleep(0.2)
             return q.serial()[mark:]
         out = run("fat info", r"\[fat \] FAT32 volume .* free")
-        assert 'volume "TESTDISK"' in out, out
+        assert 'volume "TESTDISK"' in out and (not usb or 'USB stick' in out), out
         out = run("fat ls", r"\[fat \] \d+ item")
         assert "A Long File Name.txt" in out and "HELLO.TXT" in out and "DOCS" in out and "BIG.BIN" in out and "4 item(s)" in out, out
         assert re.search(r"BIG\.BIN\s+150000", out), out
@@ -92,3 +98,5 @@ def session(name, partitioned):
 
 session("bare", False)
 session("partitioned", True)
+session("usb-bare", False, usb=True)
+session("usb-partitioned", True, usb=True)

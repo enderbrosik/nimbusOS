@@ -5,6 +5,7 @@
 #include "fs/fat32.h"
 #include "fs/vfs.h"
 #include "drivers/ata.h"
+#include "drivers/usb.h"
 #include "drivers/rtc.h"
 #include "kernel/heap.h"
 #include "kernel/string.h"
@@ -41,8 +42,14 @@ static struct {
     u32 fatbuf_sec;                 /* FAT sector held in fatbuf, or 0xFFFFFFFF */
 } V;
 
-static int rd(u32 lba, void *buf) { return ata_read(V.drive, V.part_lba + lba, 1, buf) ? E_IO : 0; }
-static int wr(u32 lba, const void *buf) { return ata_write(V.drive, V.part_lba + lba, 1, buf) ? E_IO : 0; }
+/* drive FAT_USB_DRIVE is the USB stick, the others are ATA drives */
+static int dread(int drive, u32 lba, void *buf) { return drive == FAT_USB_DRIVE ? usb_disk_read(lba, 1, buf) : ata_read(drive, lba, 1, buf); }
+static int rd(u32 lba, void *buf) { return dread(V.drive, V.part_lba + lba, buf) ? E_IO : 0; }
+static int wr(u32 lba, const void *buf)
+{
+    u32 at = V.part_lba + lba;
+    return (V.drive == FAT_USB_DRIVE ? usb_disk_write(at, 1, buf) : ata_write(V.drive, at, 1, buf)) ? E_IO : 0;
+}
 static u32 le32(const u8 *p) { return p[0] | p[1] << 8 | p[2] << 16 | (u32)p[3] << 24; }
 static u16 le16(const u8 *p) { return p[0] | p[1] << 8; }
 static void put16(u8 *p, u32 v) { p[0] = v; p[1] = v >> 8; }
@@ -410,7 +417,7 @@ static int update_entry(u32 dir, u32 idx, u32 cluster, u32 size)
 static int try_volume(int drive, u32 lba)
 {
     u8 b[512];
-    if (ata_read(drive, lba, 1, b) || b[510] != 0x55 || b[511] != 0xAA) return E_BADFS;
+    if (dread(drive, lba, b) || b[510] != 0x55 || b[511] != 0xAA) return E_BADFS;
     if (le16(b + 11) != 512 || !b[13] || le16(b + 22) != 0 || !le32(b + 36) || le16(b + 17) != 0) return E_BADFS;
     u32 total = le16(b + 19) ? le16(b + 19) : le32(b + 32);
     u32 spc = b[13], reserved = le16(b + 14), nfats = b[16], fatsz = le32(b + 36);
@@ -436,10 +443,10 @@ static int try_volume(int drive, u32 lba)
 int fat32_mount(void)
 {
     if (V.mounted) return 0;
-    for (int d = 0; d < ATA_MAX_DRIVES; d++) {
-        if (!g_ata[d].present || d == boot_drive_index()) continue;
+    for (int d = 0; d <= FAT_USB_DRIVE; d++) {
+        if (d == FAT_USB_DRIVE ? !usb_disk_present() : (!g_ata[d].present || d == boot_drive_index())) continue;
         u8 mbr[512];
-        if (ata_read(d, 0, 1, mbr)) continue;
+        if (dread(d, 0, mbr)) continue;
         if (!try_volume(d, 0)) return 0;                                 /* the whole disk is one volume */
         if (mbr[510] != 0x55 || mbr[511] != 0xAA) continue;
         for (int p = 0; p < 4; p++) {

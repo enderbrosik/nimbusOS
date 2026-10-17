@@ -1,3 +1,4 @@
+USB: USB sticks work (xHCI controller + mass storage); open one in the Terminal with the "fat" command
 FAT32: read and write FAT32 disks (USB-stick style, with long file names) from the Terminal with the "fat" command: info, ls, cat, get, put, mkdir, rm
 Nimbus Update: "What's new" is now a scrollable box (mouse wheel, scroll bar, arrow keys, Page Up/Down) with wrapped lines, so long release notes can be read in full
 # One line per note; shown on the download page and in Nimbus Update. Lines starting with # are ignored.

@@ -29,6 +29,7 @@
 #include "drivers/pci.h"
 #include "drivers/fb.h"
 #include "drivers/ata.h"
+#include "drivers/usb.h"
 #include "gui/gfx.h"
 #include "fs/vfs.h"
 
@@ -119,6 +120,7 @@ void kmain(struct bootinfo *bi)
     mouse_init();
     ata_init();
     pci_enumerate();
+    usb_init();
 
     /* ---- Stage 4: file system ---- */
     if (!vfs_init()) panic("cannot mount the system volume");
