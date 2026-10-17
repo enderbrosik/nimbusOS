@@ -1,4 +1,5 @@
 # One line per note; shown on the download page and in Nimbus Update. Lines starting with # are ignored.
+Web Browser: search the web by typing words in the address bar (DuckDuckGo), result links go straight to the page, and links with queries, ../ and #fragments work
 Text: the UI font is now anti-aliased DejaVu Sans, regular and bold, so text is smoother at every size
 Web Browser: CSS support: <style> blocks, colours, bold, font sizes, centred and right-aligned text, underline, and hidden elements
 Web Browser: headings use a larger font, and words no longer have stray gaps before punctuation
