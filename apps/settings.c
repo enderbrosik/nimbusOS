@@ -91,6 +91,7 @@ static void cursor_file_chosen(bool ok, const char *path, void *ctx)
         return;
     }
     settings_set("cursor_file", path);
+    klog("[sett] pointer image %s\n", path);
     settings_set_int("cursor_style", 4);
     wm_set_cursor_look(4, settings_get_int("cursor_scale", 1), (u32)settings_get_int("cursor_fill", 0xFFFFFF));
     paint(w);
@@ -430,6 +431,7 @@ static void on_event(window_t *w, event_t *e)
                 if (rect_contains(rect_make(c.x + i * 80, c.y + 298, 72, 28), e->x, e->y)) {
                     wm_set_ui_scale(ui_scales[i]);
                     settings_set_int("ui_scale", ui_scales[i]);
+                    klog("[sett] ui scale %d%%\n", ui_scales[i]);
                     paint(w);
                     return;
                 }
