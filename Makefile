@@ -112,6 +112,15 @@ $(GEN)/update_pubkey.h: $(wildcard $(UPDATE_PUBKEY))
 	@printf '#define NIMBUS_UPDATE_PUBKEY "%s"\n' "$$(cat $(UPDATE_PUBKEY) 2>/dev/null | tr -d ' \n')" > $@
 FORCE:
 
+# The UI font: DejaVu outlines rasterised by a host tool (the kernel has no FPU).
+$(GEN)/ui_font.c: $(BUILD)/tools/mkfont fonts/DejaVuSans.ttf fonts/DejaVuSans-Bold.ttf
+	@mkdir -p $(GEN)
+	$(BUILD)/tools/mkfont $@ fonts/DejaVuSans.ttf fonts/DejaVuSans-Bold.ttf
+$(BUILD)/gen/ui_font.o: $(GEN)/ui_font.c gui/fontdata.h
+	@mkdir -p $(dir $@)
+	$(KCC) $(CFLAGS) -c $< -o $@
+KOBJS += $(BUILD)/gen/ui_font.o
+
 $(BUILD)/%.o: %.c | $(GEN)/nimbus_version.h $(GEN)/update_pubkey.h
 	@mkdir -p $(dir $@)
 	$(KCC) $(CFLAGS) -MMD -MP -c $< -o $@
@@ -198,6 +207,10 @@ test: $(BUILD)/tools/fstest $(BUILD)/tools/cryptotest $(BUILD)/tools/calcmath
 	$(BUILD)/tools/fstest
 	$(BUILD)/tools/cryptotest
 	$(BUILD)/tools/calcmath
+
+$(BUILD)/tools/mkfont: tools/mkfont.c third_party/stb/stb_truetype.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) -Wno-unused-function -Wno-sign-compare $< -o $@ -lm
 
 NFSTOOL := $(BUILD)/tools/nfstool
 MKWALL  := $(BUILD)/tools/mkwallpaper
