@@ -1,5 +1,5 @@
 // NimbusOS - the NimbusFS volume: lookups, directory listing, reading, writing, create, rename, delete.
-// NOT COMPILED YET (see NimbusFileSystem.swift).
+// NOT COMPILED YET (see NimbusFileSystem.swift).  Methods use FSKit's Swift form (async throws).
 import FSKit
 import Foundation
 
@@ -25,17 +25,19 @@ private func posix(_ nb: Int32) -> any Error {
     }
     return fs_errorForPOSIXError(e.rawValue)
 }
+private func unsupported() -> any Error { fs_errorForPOSIXError(POSIXError.ENOTSUP.rawValue) }
 
 final class NimbusVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOperations, FSVolume.PathConfOperations {
     private let fs: UnsafeMutablePointer<nbfs_t>
-    private let lock = NSLock()                          // NimbusFS is not thread safe
+    private let lock = NSLock()                          // NimbusFS is not thread safe; never held across a suspension point
 
     init(fs: UnsafeMutablePointer<nbfs_t>, name: String) {
         self.fs = fs
         super.init(volumeID: FSVolume.Identifier(uuid: UUID()), volumeName: FSFileName(string: name))
     }
 
-    func close() { lock.lock(); nbfs_shim_close(fs); lock.unlock() }
+    private func locked<T>(_ body: () throws -> T) rethrows -> T { try lock.withLock(body) }
+    func close() { locked { nbfs_shim_close(fs) } }
 
     // MARK: helpers
     private func item(_ st: nbfs_stat) -> NimbusItem {
@@ -66,10 +68,9 @@ final class NimbusVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpera
         return nbfs_stat_inode(fs, ino, &st) == 0 ? st : nil
     }
 
-    private var rootInode: UInt32 {
-        var ino: UInt32 = 0
-        _ = nbfs_lookup(fs, "/", &ino)
-        return ino
+    private func nb(_ item: FSItem) throws -> NimbusItem {
+        guard let it = item as? NimbusItem else { throw posix(NBFS_ENOENT) }
+        return it
     }
 
     // MARK: FSVolume.Operations
@@ -85,7 +86,7 @@ final class NimbusVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpera
     var volumeStatistics: FSStatFSResult {
         let r = FSStatFSResult(fileSystemTypeName: "nimbusfs")
         var total: UInt32 = 0, free: UInt32 = 0
-        lock.lock(); nbfs_statfs(fs, &total, &free); lock.unlock()
+        locked { nbfs_statfs(fs, &total, &free) }
         r.blockSize = 4096
         r.ioSize = 4096
         r.totalBlocks = UInt64(total / 4096)
@@ -94,145 +95,135 @@ final class NimbusVolume: FSVolume, FSVolume.Operations, FSVolume.ReadWriteOpera
         return r
     }
 
-    func mount(options: FSTaskOptions, replyHandler: @escaping ((any Error)?) -> Void) { replyHandler(nil) }
-    func unmount(replyHandler: @escaping () -> Void) { close(); replyHandler() }
-    func synchronize(flags: FSSyncFlags, replyHandler: @escaping ((any Error)?) -> Void) {
-        lock.lock(); nbfs_sync(fs); lock.unlock()
-        replyHandler(nil)
-    }
+    func mount(options: FSTaskOptions) async throws {}
+    func unmount() async { close() }
+    func synchronize(flags: FSSyncFlags) async throws { locked { _ = nbfs_sync(fs) } }
 
-    func activate(options: FSTaskOptions, replyHandler: @escaping (FSItem?, (any Error)?) -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        guard let st = stat(rootInode) else { replyHandler(nil, posix(NBFS_EIO)); return }
-        replyHandler(item(st), nil)
-    }
-    func deactivate(options: FSDeactivateOptions, replyHandler: @escaping ((any Error)?) -> Void) { replyHandler(nil) }
-
-    func attributes(_ desiredAttributes: FSItem.GetAttributesRequest, of fsItem: FSItem,
-                    replyHandler: @escaping (FSItem.Attributes?, (any Error)?) -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        guard let it = fsItem as? NimbusItem, let st = stat(it.inode) else { replyHandler(nil, posix(NBFS_ENOENT)); return }
-        replyHandler(attrs(st), nil)
-    }
-
-    func setAttributes(_ newAttributes: FSItem.SetAttributesRequest, on fsItem: FSItem,
-                       replyHandler: @escaping (FSItem.Attributes?, (any Error)?) -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        guard let it = fsItem as? NimbusItem else { replyHandler(nil, posix(NBFS_ENOENT)); return }
-        if newAttributes.isValid(.size) {                    // truncate / extend
-            let r = nbfs_truncate(fs, it.inode, UInt32(newAttributes.size))
-            if r < 0 { replyHandler(nil, posix(r)); return }
-            nbfs_sync(fs)
+    func activate(options: FSTaskOptions) async throws -> FSItem {
+        try locked {
+            guard let st = stat(UInt32(NBFS_ROOT_INO)) else { throw posix(NBFS_EIO) }
+            return item(st)
         }
-        guard let st = stat(it.inode) else { replyHandler(nil, posix(NBFS_ENOENT)); return }
-        replyHandler(attrs(st), nil)                         // owners, modes and times are not stored by NimbusFS
+    }
+    func deactivate(options: FSDeactivateOptions) async throws {}
+
+    func attributes(_ desiredAttributes: FSItem.GetAttributesRequest, of fsItem: FSItem) async throws -> FSItem.Attributes {
+        let it = try nb(fsItem)
+        return try locked {
+            guard let st = stat(it.inode) else { throw posix(NBFS_ENOENT) }
+            return attrs(st)
+        }
     }
 
-    func lookupItem(named name: FSFileName, inDirectory directory: FSItem,
-                    replyHandler: @escaping (FSItem?, FSFileName?, (any Error)?) -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        guard let dir = directory as? NimbusItem else { replyHandler(nil, nil, posix(NBFS_ENOTDIR)); return }
-        var st = nbfs_stat()
-        let r = nbfs_shim_lookup(fs, dir.inode, name.string ?? "", &st)
-        if r != 0 { replyHandler(nil, nil, posix(r)); return }
-        replyHandler(item(st), name, nil)
+    func setAttributes(_ newAttributes: FSItem.SetAttributesRequest, on fsItem: FSItem) async throws -> FSItem.Attributes {
+        let it = try nb(fsItem)
+        return try locked {
+            if newAttributes.isValid(.size) {                // truncate / extend
+                let r = nbfs_truncate(fs, it.inode, UInt32(newAttributes.size))
+                if r < 0 { throw posix(r) }
+                nbfs_sync(fs)
+            }
+            guard let st = stat(it.inode) else { throw posix(NBFS_ENOENT) }
+            return attrs(st)                                 // owners, modes and times are not stored by NimbusFS
+        }
     }
 
-    func reclaimItem(_ item: FSItem, replyHandler: @escaping ((any Error)?) -> Void) { replyHandler(nil) }
-    func readSymbolicLink(_ item: FSItem, replyHandler: @escaping (FSFileName?, (any Error)?) -> Void) {
-        replyHandler(nil, fs_errorForPOSIXError(POSIXError.ENOTSUP.rawValue))
+    func lookupItem(named name: FSFileName, inDirectory directory: FSItem) async throws -> (FSItem, FSFileName) {
+        let dir = try nb(directory)
+        return try locked {
+            var st = nbfs_stat()
+            let r = nbfs_shim_lookup(fs, dir.inode, name.string ?? "", &st)
+            if r != 0 { throw posix(r) }
+            return (item(st), name)
+        }
     }
+
+    func reclaimItem(_ item: FSItem) async throws {}
+    func readSymbolicLink(_ item: FSItem) async throws -> FSFileName { throw unsupported() }
 
     func createItem(named name: FSFileName, type: FSItem.ItemType, inDirectory directory: FSItem,
-                    attributes newAttributes: FSItem.SetAttributesRequest,
-                    replyHandler: @escaping (FSItem?, FSFileName?, (any Error)?) -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        guard let dir = directory as? NimbusItem else { replyHandler(nil, nil, posix(NBFS_ENOTDIR)); return }
-        guard type == .file || type == .directory else {
-            replyHandler(nil, nil, fs_errorForPOSIXError(POSIXError.ENOTSUP.rawValue)); return
+                    attributes newAttributes: FSItem.SetAttributesRequest) async throws -> (FSItem, FSFileName) {
+        let dir = try nb(directory)
+        guard type == .file || type == .directory else { throw unsupported() }
+        return try locked {
+            var st = nbfs_stat()
+            let r = nbfs_shim_create(fs, dir.inode, name.string ?? "",
+                                     Int32(type == .directory ? NBFS_TYPE_DIR : NBFS_TYPE_FILE), &st)
+            if r != 0 { throw posix(r) }
+            return (item(st), name)
         }
-        var st = nbfs_stat()
-        let r = nbfs_shim_create(fs, dir.inode, name.string ?? "",
-                                 Int32(type == .directory ? NBFS_TYPE_DIR : NBFS_TYPE_FILE), &st)
-        if r != 0 { replyHandler(nil, nil, posix(r)); return }
-        replyHandler(item(st), name, nil)
     }
 
     func createSymbolicLink(named name: FSFileName, inDirectory directory: FSItem, attributes newAttributes: FSItem.SetAttributesRequest,
-                            linkContents contents: FSFileName, replyHandler: @escaping (FSItem?, FSFileName?, (any Error)?) -> Void) {
-        replyHandler(nil, nil, fs_errorForPOSIXError(POSIXError.ENOTSUP.rawValue))
-    }
-    func createLink(to item: FSItem, named name: FSFileName, inDirectory directory: FSItem,
-                    replyHandler: @escaping (FSFileName?, (any Error)?) -> Void) {
-        replyHandler(nil, fs_errorForPOSIXError(POSIXError.ENOTSUP.rawValue))
-    }
+                            linkContents contents: FSFileName) async throws -> (FSItem, FSFileName) { throw unsupported() }
+    func createLink(to item: FSItem, named name: FSFileName, inDirectory directory: FSItem) async throws -> FSFileName { throw unsupported() }
 
-    func removeItem(_ item: FSItem, named name: FSFileName, fromDirectory directory: FSItem,
-                    replyHandler: @escaping ((any Error)?) -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        guard let dir = directory as? NimbusItem else { replyHandler(posix(NBFS_ENOTDIR)); return }
-        let r = nbfs_shim_remove(fs, dir.inode, name.string ?? "")
-        replyHandler(r == 0 ? nil : posix(r))
+    func removeItem(_ item: FSItem, named name: FSFileName, fromDirectory directory: FSItem) async throws {
+        let dir = try nb(directory)
+        try locked {
+            let r = nbfs_shim_remove(fs, dir.inode, name.string ?? "")
+            if r != 0 { throw posix(r) }
+        }
     }
 
     func renameItem(_ item: FSItem, inDirectory sourceDirectory: FSItem, named sourceName: FSFileName,
-                    to destinationName: FSFileName, inDirectory destinationDirectory: FSItem, overItem: FSItem?,
-                    replyHandler: @escaping (FSFileName?, (any Error)?) -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        guard let from = sourceDirectory as? NimbusItem, let to = destinationDirectory as? NimbusItem else {
-            replyHandler(nil, posix(NBFS_ENOTDIR)); return
+                    to destinationName: FSFileName, inDirectory destinationDirectory: FSItem, overItem: FSItem?) async throws -> FSFileName {
+        let from = try nb(sourceDirectory), to = try nb(destinationDirectory)
+        return try locked {
+            if overItem != nil { _ = nbfs_shim_remove(fs, to.inode, destinationName.string ?? "") }
+            let r = nbfs_shim_rename(fs, from.inode, sourceName.string ?? "", to.inode, destinationName.string ?? "")
+            if r != 0 { throw posix(r) }
+            return destinationName
         }
-        if overItem != nil { _ = nbfs_shim_remove(fs, to.inode, destinationName.string ?? "") }
-        let r = nbfs_shim_rename(fs, from.inode, sourceName.string ?? "", to.inode, destinationName.string ?? "")
-        replyHandler(r == 0 ? destinationName : nil, r == 0 ? nil : posix(r))
     }
 
     func enumerateDirectory(_ directory: FSItem, startingAt cookie: FSDirectoryCookie, verifier: FSDirectoryVerifier,
-                            attributes: FSItem.GetAttributesRequest?, packer: FSDirectoryEntryPacker,
-                            replyHandler: @escaping (FSDirectoryVerifier, (any Error)?) -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        guard let dir = directory as? NimbusItem else { replyHandler(verifier, posix(NBFS_ENOTDIR)); return }
-        var cur = UInt32(truncatingIfNeeded: cookie.rawValue)         // our cookie is NimbusFS's own readdir cookie
-        var e = nbfs_entry()
-        while nbfs_readdir(fs, dir.inode, &cur, &e) == 1 {
-            let name = withUnsafePointer(to: &e.name) {
-                $0.withMemoryRebound(to: CChar.self, capacity: Int(NBFS_NAME_MAX) + 1) { String(cString: $0) }
+                            attributes: FSItem.GetAttributesRequest?, packer: FSDirectoryEntryPacker) async throws -> FSDirectoryVerifier {
+        let dir = try nb(directory)
+        locked {
+            var cur = UInt32(truncatingIfNeeded: cookie.rawValue)         // our cookie is NimbusFS's own readdir cookie
+            var e = nbfs_entry()
+            while nbfs_readdir(fs, dir.inode, &cur, &e) == 1 {
+                let name = withUnsafePointer(to: &e.name) {
+                    $0.withMemoryRebound(to: CChar.self, capacity: Int(NBFS_NAME_MAX) + 1) { String(cString: $0) }
+                }
+                let isDir = e.type == UInt32(NBFS_TYPE_DIR)
+                var entryAttrs: FSItem.Attributes? = nil
+                if attributes != nil, let st = stat(e.inode) { entryAttrs = attrs(st) }
+                let ok = packer.packEntry(name: FSFileName(string: name), itemType: isDir ? .directory : .file,
+                                          itemID: FSItem.Identifier(rawValue: UInt64(e.inode) + 1) ?? .invalid,
+                                          nextCookie: FSDirectoryCookie(rawValue: UInt64(cur)),
+                                          attributes: entryAttrs)
+                if !ok { break }
             }
-            let isDir = e.type == UInt32(NBFS_TYPE_DIR)
-            var entryAttrs: FSItem.Attributes? = nil
-            if attributes != nil, let st = stat(e.inode) { entryAttrs = attrs(st) }
-            let ok = packer.packEntry(name: FSFileName(string: name), itemType: isDir ? .directory : .file,
-                                      itemID: FSItem.Identifier(rawValue: UInt64(e.inode) + 1) ?? .invalid,
-                                      nextCookie: FSDirectoryCookie(rawValue: UInt64(cur)),
-                                      attributes: entryAttrs)
-            if !ok { break }
         }
-        replyHandler(FSDirectoryVerifier(rawValue: 1), nil)
+        return FSDirectoryVerifier(rawValue: 1)
     }
 
     // MARK: FSVolume.ReadWriteOperations
-    func read(from fsItem: FSItem, at offset: off_t, length: Int, into buffer: FSMutableFileDataBuffer,
-              replyHandler: @escaping (Int, (any Error)?) -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        guard let it = fsItem as? NimbusItem, let st = stat(it.inode) else { replyHandler(0, posix(NBFS_ENOENT)); return }
-        if offset >= off_t(st.size) { replyHandler(0, nil); return }
-        let n = min(length, Int(st.size) - Int(offset))
-        var got = 0
-        buffer.withUnsafeMutableBytes { raw in
-            let r = nbfs_read(fs, it.inode, UInt32(offset), raw.baseAddress, UInt32(n))
-            got = Int(max(0, r))
+    func read(from fsItem: FSItem, at offset: off_t, length: Int, into buffer: FSMutableFileDataBuffer) async throws -> Int {
+        let it = try nb(fsItem)
+        return try locked {
+            guard let st = stat(it.inode) else { throw posix(NBFS_ENOENT) }
+            if offset >= off_t(st.size) { return 0 }
+            let n = min(length, Int(st.size) - Int(offset))
+            var got = 0
+            buffer.withUnsafeMutableBytes { raw in
+                let r = nbfs_read(fs, it.inode, UInt32(offset), raw.baseAddress, UInt32(n))
+                got = Int(max(0, r))
+            }
+            return got
         }
-        replyHandler(got, nil)
     }
 
-    func write(contents: Data, to fsItem: FSItem, at offset: off_t,
-               replyHandler: @escaping (Int, (any Error)?) -> Void) {
-        lock.lock(); defer { lock.unlock() }
-        guard let it = fsItem as? NimbusItem else { replyHandler(0, posix(NBFS_ENOENT)); return }
-        let r = contents.withUnsafeBytes { nbfs_write(fs, it.inode, UInt32(offset), $0.baseAddress, UInt32(contents.count)) }
-        if r < 0 { replyHandler(0, posix(r)); return }
-        nbfs_sync(fs)
-        replyHandler(Int(r), nil)
+    func write(contents: Data, to fsItem: FSItem, at offset: off_t) async throws -> Int {
+        let it = try nb(fsItem)
+        return try locked {
+            let r = contents.withUnsafeBytes { nbfs_write(fs, it.inode, UInt32(offset), $0.baseAddress, UInt32(contents.count)) }
+            if r < 0 { throw posix(r) }
+            nbfs_sync(fs)
+            return Int(r)
+        }
     }
 
     // MARK: FSVolume.PathConfOperations

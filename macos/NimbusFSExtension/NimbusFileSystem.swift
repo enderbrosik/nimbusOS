@@ -47,46 +47,34 @@ final class NimbusFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
     private var device: BlockDevice?
     private var volume: NimbusVolume?
 
-    // Is this device a NimbusFS volume?  (Finder/diskutil call this before mounting.)
-    func probeResource(resource: FSResource, replyHandler: @escaping (FSProbeResult?, (any Error)?) -> Void) {
-        guard let blk = resource as? FSBlockDeviceResource else {
-            replyHandler(FSProbeResult.notRecognized, nil)
-            return
-        }
+    // Is this device a NimbusFS volume?  (diskutil / mount call this before mounting.)
+    func probeResource(resource: FSResource) async throws -> FSProbeResult {
+        guard let blk = resource as? FSBlockDeviceResource else { return FSProbeResult.notRecognized }
         let dev = BlockDevice(blk)
         let r = nbfs_shim_probe(Unmanaged.passUnretained(dev).toOpaque(), cRead, dev.sectors)
-        if r == 0 {
-            replyHandler(FSProbeResult.usable(name: "NimbusFS", containerID: FSContainerIdentifier(uuid: UUID())), nil)
-        } else {
-            replyHandler(FSProbeResult.notRecognized, nil)
-        }
+        if r == 0 { return FSProbeResult.usable(name: "NimbusFS", containerID: FSContainerIdentifier(uuid: UUID())) }
+        return FSProbeResult.notRecognized
     }
 
-    func loadResource(resource: FSResource, options: FSTaskOptions,
-                      replyHandler: @escaping (FSVolume?, (any Error)?) -> Void) {
-        guard let blk = resource as? FSBlockDeviceResource else {
-            replyHandler(nil, fs_errorForPOSIXError(POSIXError.EINVAL.rawValue))
-            return
-        }
+    func loadResource(resource: FSResource, options: FSTaskOptions) async throws -> FSVolume {
+        guard let blk = resource as? FSBlockDeviceResource else { throw fs_errorForPOSIXError(POSIXError.EINVAL.rawValue) }
         let dev = BlockDevice(blk)
         var err: Int32 = 0
         guard let fs = nbfs_shim_mount(Unmanaged.passUnretained(dev).toOpaque(), cRead, cWrite, dev.sectors, &err) else {
             NSLog("NimbusFS: mount failed: %s", String(cString: nbfs_shim_strerror(err)))
-            replyHandler(nil, fs_errorForPOSIXError(POSIXError.EIO.rawValue))
-            return
+            throw fs_errorForPOSIXError(POSIXError.EIO.rawValue)
         }
         device = dev                       // keep the device alive as long as the volume
         let vol = NimbusVolume(fs: fs, name: "NimbusFS")
         volume = vol
         containerStatus = .ready
-        replyHandler(vol, nil)
+        return vol
     }
 
-    func unloadResource(resource: FSResource, options: FSTaskOptions, replyHandler: @escaping ((any Error)?) -> Void) {
+    func unloadResource(resource: FSResource, options: FSTaskOptions) async throws {
         volume?.close()
         volume = nil
         device = nil
-        replyHandler(nil)
     }
 
     func didFinishLoading() {}
