@@ -197,7 +197,7 @@ static void draw_status(window_t *w)
     char st[128];
     int n = snprintf(st, sizeof st, "%s   |   %dx%d px", tool_names[p->tool], p->canvas->w, p->canvas->h);
     if (p->mouse_in) snprintf(st + n, sizeof st - n, "   |   %d, %d", p->cx, p->cy);
-    gfx_text(s, 8, sy + 2, st, C_TEXT, COLOR_NONE);
+    gfx_ui_text(s, 8, sy + 2, st, C_TEXT);
 }
 
 static void paint_status(window_t *w)
