@@ -5,4 +5,3 @@ Calculator: a four-function desk calculator in the Start menu, with keyboard inp
 Breakout: a brick-breaking game in the Start menu
 System clipboard: Ctrl+C and Ctrl+V work in text fields, and Ctrl+Shift+C shows the clipboard history
 Paint: transparent pen (first swatch), canvas sizes from 32x32 to 3840x2160 (Size, or Ctrl+W), and transparent pictures save with alpha
-Nimbus Update: fixed the version check so a release can be installed on any earlier version
