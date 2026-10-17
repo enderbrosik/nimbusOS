@@ -2,7 +2,13 @@
  */
 #ifndef NBFS_SHIM_H
 #define NBFS_SHIM_H
-#include "fs/nbfs.h"        /* found through Header Search Paths = the repo root */
+#include <stdint.h>
+#include <stdbool.h>
+#if __has_include("fs/nbfs.h")
+#include "fs/nbfs.h"        /* found through Header Search Paths (a folder that contains fs/nbfs.h) */
+#else
+#include "nbfs.h"
+#endif
 
 typedef int (*nbfs_shim_io)(void *ctx, uint32_t lba, uint32_t count, void *buf);
 typedef int (*nbfs_shim_wio)(void *ctx, uint32_t lba, uint32_t count, const void *buf);
