@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.aaron.garsia.nimbusfs.fsbundle</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>nimbusfs_fmt</string>
+	<key>CFBundlePackageType</key>
+	<string>fs  </string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleSignature</key>
+	<string>????</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>FSPersonalities</key>
+	<dict>
+		<key>NimbusFS</key>
+		<dict>
+			<key>FSFormatArguments</key>
+			<string>-V</string>
+			<key>FSFormatContentMask</key>
+			<string>0x4E</string>
+			<key>FSFormatExecutable</key>
+			<string>newfs_nimbusfs_fmt</string>
+			<key>FSFormatMaximumSize</key>
+			<integer>4194304000</integer>
+			<key>FSFormatMinimumSize</key>
+			<integer>1048576</integer>
+			<key>FSMountArguments</key>
+			<string></string>
+			<key>FSMountExecutable</key>
+			<string>mount_nimbusfs_fmt</string>
+			<key>FSName</key>
+			<string>NimbusFS</string>
+			<key>FSRepairArguments</key>
+			<string>-y</string>
+			<key>FSRepairExecutable</key>
+			<string>fsck_nimbusfs_fmt</string>
+			<key>FSSubType</key>
+			<integer>1</integer>
+			<key>FSVerificationArguments</key>
+			<string>-n</string>
+			<key>FSVerificationExecutable</key>
+			<string>fsck_nimbusfs_fmt</string>
+		</dict>
+	</dict>
+</dict>
+</plist>

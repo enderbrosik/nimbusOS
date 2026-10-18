@@ -7,11 +7,15 @@ CFLAGS  ?= -std=gnu11 -O2 -Wall -Wextra -Wno-unused-parameter
 FUSE    := $(shell pkg-config --cflags --libs fuse 2>/dev/null)
 BIN     := build
 
-all: $(BIN)/nfstool $(if $(FUSE),$(BIN)/nimbusfuse)
+all: $(BIN)/nfstool $(BIN)/newfs_nimbusfs_fmt $(if $(FUSE),$(BIN)/nimbusfuse)
 
 $(BIN)/nfstool: tools/nfstool.c tools/hostdev.h fs/nbfs.c fs/nbfs.h
 	@mkdir -p $(BIN)
 	$(CC) $(CFLAGS) -I. tools/nfstool.c fs/nbfs.c -o $@
+
+$(BIN)/newfs_nimbusfs_fmt: tools/newfs_nimbusfs.c fs/nbfs.c fs/nbfs.h
+	@mkdir -p $(BIN)
+	$(CC) $(CFLAGS) -I. tools/newfs_nimbusfs.c fs/nbfs.c -o $@
 
 $(BIN)/nimbusfuse: tools/nimbusfuse.c tools/hostdev.h fs/nbfs.c fs/nbfs.h
 	@mkdir -p $(BIN)

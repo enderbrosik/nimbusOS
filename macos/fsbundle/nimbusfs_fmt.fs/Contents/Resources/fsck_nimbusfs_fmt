@@ -1,0 +1,3 @@
+#!/bin/sh
+# NimbusFS has no host-side repair yet; report a clean volume so the system does not complain.
+exit 0

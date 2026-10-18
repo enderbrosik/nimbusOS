@@ -1,0 +1,5 @@
+#!/bin/sh
+# Called by the system as: mount_nimbusfs_fmt [-o opts] <device> <mountpoint>
+# NimbusFS is mounted by the FSKit extension (short name "nimbusfs"); hand over to it.
+for a in "$@"; do dev=$mp; mp=$a; done
+exec /sbin/mount -F -t nimbusfs "$dev" "$mp"

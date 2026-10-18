@@ -88,3 +88,17 @@ A bare `nfstool mkfs` image has no partition table, so macOS says "not readable"
     diskutil unmountDisk /dev/diskN
     sudo dd if=$HOME/stick.img of=/dev/rdiskN bs=4m    # ERASES the stick. of= is the stick, if= the image.
     # If macOS says "not readable", click Ignore (never Initialize).
+
+## Disk Utility "Erase" entry (experimental)
+
+Disk Utility builds its Erase > Format list from file system bundles in `/Library/Filesystems` (like Paragon's
+`ufsd_ExtFS.fs`), not from the FSKit extension. `macos/fsbundle/nimbusfs_fmt.fs` is a format-only bundle: it lists a
+NimbusFS personality and ships `newfs_nimbusfs_fmt` (built from `tools/newfs_nimbusfs.c`), which Disk Utility runs on the
+partition it creates. Mounting stays with the FSKit extension (`mount_nimbusfs_fmt` hands over to
+`mount -F -t nimbusfs`). The bundle is deliberately called `nimbusfs_fmt` so legacy `mount -t nimbusfs` does not pick it.
+
+    make
+    sh macos/fsbundle/install.sh        # copies it to /Library/Filesystems (sudo)
+    sh macos/fsbundle/uninstall.sh      # removes it again
+
+Untested on macOS. Try it on a disk image or a spare stick only.
