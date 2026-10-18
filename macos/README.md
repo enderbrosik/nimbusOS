@@ -76,3 +76,15 @@ Tried and **not working** on macOS 27 / FSKit, so do not retrace these:
 - Own file type / icon for `*.nimg` images (exported UTI conforming to `public.disk-image` or `public.data`):
   LaunchServices lists the type as registered, yet `UTType(filenameExtension: "nimg")` stayed `dyn.`.
   Keep using plain `.img` images; double-click mounting works for those.
+
+## USB sticks
+
+Use an MBR + `0x4E` partition (`nfstool mkdisk`) so macOS offers the stick to the extension on its own.
+A bare `nfstool mkfs` image has no partition table, so macOS says "not readable" and it needs a manual
+`sudo mount -F -t nimbusfs /dev/diskN <folder>`.
+
+    nfstool mkdisk ~/stick.img 900 STICK
+    diskutil list external                  # find the 2.0 GB "(external, physical)" disk, e.g. disk7. It changes every plug-in!
+    diskutil unmountDisk /dev/diskN
+    sudo dd if=$HOME/stick.img of=/dev/rdiskN bs=4m    # ERASES the stick. of= is the stick, if= the image.
+    # If macOS says "not readable", click Ignore (never Initialize).

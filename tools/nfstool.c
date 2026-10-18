@@ -16,6 +16,8 @@
  *   nfstool check  <image>                         consistency check
  *   nfstool df     <image>
  *   nfstool blank  <new.img> <size-MiB>           create a blank (all-zero, sparse) disk image
+ *   nfstool mkdisk <new.img> <size-MiB> [label]   like mkfs, but inside an MBR partition (type 0x4E) - this is the
+ *                                                 layout to write to a USB stick so macOS offers it to the extension
  *
  * An image with an MBR whose first partition is type 0x4E is accessed
  * through that partition (that is how build/nimbus.img is laid out).
@@ -172,7 +174,7 @@ static void report(const char *msg) { fprintf(stderr, "  problem: %s\n", msg); }
 int main(int argc, char **argv)
 {
     if (argc < 3) {
-        fprintf(stderr, "usage: nfstool <mkfs|format|blank|ls|tree|cat|put|get|mkdir|rm|mv|import|export|check|df> <image> ...\n");
+        fprintf(stderr, "usage: nfstool <mkfs|mkdisk|format|blank|ls|tree|cat|put|get|mkdir|rm|mv|import|export|check|df> <image> ...\n");
         return 1;
     }
     const char *cmd = argv[1], *img = argv[2];
@@ -193,6 +195,35 @@ int main(int argc, char **argv)
         int r = nbfs_format(&dev, argc > 4 ? argv[4] : "NIMBUS", host_now());
         if (r) die("format", r);
         printf("nfstool: created empty NimbusFS image %s (%ld MiB)\n", img, mib);
+        return 0;
+    }
+    if (!strcmp(cmd, "mkdisk")) {
+        if (argc < 4) { fprintf(stderr, "usage: nfstool mkdisk <new.img> <size-MiB> [label]\n"); return 1; }
+        struct stat st;
+        if (stat(img, &st) == 0 && !S_ISREG(st.st_mode)) { fprintf(stderr, "refusing to touch %s\n", img); return 1; }
+        long mib = atol(argv[3]);
+        if (mib < 2 || mib > 4000) { fprintf(stderr, "size must be 2..4000 MiB\n"); return 1; }
+        int fd = open(img, O_RDWR | O_CREAT | O_TRUNC | HD_OPEN_FLAGS, 0644);
+        if (fd < 0) { perror(img); return 1; }
+        if (ftruncate(fd, (off_t)mib * 1024 * 1024) != 0) { perror("ftruncate"); return 1; }
+        uint32_t total = (uint32_t)(mib * 2048), start = 2048, cnt = total - start;
+        unsigned char mbr[512] = {0};
+        unsigned char *e = mbr + 0x1BE;
+        e[0] = 0x00;                         /* not bootable */
+        e[1] = 0xFE; e[2] = 0xFF; e[3] = 0xFF;   /* CHS: "use LBA" */
+        e[4] = 0x4E;                         /* NimbusFS */
+        e[5] = 0xFE; e[6] = 0xFF; e[7] = 0xFF;
+        memcpy(e + 8, &start, 4);
+        memcpy(e + 12, &cnt, 4);
+        mbr[510] = 0x55; mbr[511] = 0xAA;
+        if (pwrite(fd, mbr, 512, 0) != 512) { perror("write mbr"); return 1; }
+        close(fd);
+        struct hostdev h;
+        struct nbfs_blkdev dev;
+        if (hostdev_open(img, &h, &dev, 1)) return 1;
+        int r = nbfs_format(&dev, argc > 4 ? argv[4] : "NIMBUS", host_now());
+        if (r) die("format", r);
+        printf("nfstool: created %s: MBR + NimbusFS partition (type 0x4E, %u sectors at LBA %u)\n", img, cnt, start);
         return 0;
     }
     if (!strcmp(cmd, "blank")) {
