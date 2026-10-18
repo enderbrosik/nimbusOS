@@ -102,3 +102,12 @@ partition it creates. Mounting stays with the FSKit extension (`mount_nimbusfs_f
     sh macos/fsbundle/uninstall.sh      # removes it again
 
 Untested on macOS. Try it on a disk image or a spare stick only.
+
+### One-command stick formatter (macOS)
+
+Disk Utility's Erase fails while building the partition map (MediaKit rejects the NimbusFS GUID given through the format
+entry), but `diskutil partitionDisk ... GPT "%876437C4-C160-4036-ACF0-B48784DF0284%" ...` works, and the extension mounts
+such a partition. `format-nimbusfs-stick.sh` does the whole sequence with confirmations. It ERASES the disk you pick.
+
+    sh macos/fsbundle/install.sh                       # once
+    bash macos/fsbundle/format-nimbusfs-stick.sh MYSTICK
