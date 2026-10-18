@@ -25,7 +25,7 @@
 			<key>FSFormatArguments</key>
 			<string>-V</string>
 			<key>FSFormatContentMask</key>
-			<string>0x4E</string>
+			<string>876437C4-C160-4036-ACF0-B48784DF0284</string>
 			<key>FSFormatExecutable</key>
 			<string>newfs_nimbusfs_fmt</string>
 			<key>FSFormatMaximumSize</key>
