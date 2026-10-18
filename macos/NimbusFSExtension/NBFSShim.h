@@ -17,6 +17,9 @@ typedef int (*nbfs_shim_wio)(void *ctx, uint32_t lba, uint32_t count, const void
 nbfs_t *nbfs_shim_mount(void *ctx, nbfs_shim_io rd, nbfs_shim_wio wr, uint32_t sectors, int *err);
 void nbfs_shim_close(nbfs_t *fs);
 
+/* Copies the volume label (always NUL terminated) into out; out is empty if the volume has no label. */
+void nbfs_shim_label(nbfs_t *fs, char *out, int max);
+
 /* Formats the device as an empty NimbusFS volume. Returns 0 or an NBFS_E* error. */
 int nbfs_shim_format(void *ctx, nbfs_shim_io rd, nbfs_shim_wio wr, uint32_t sectors, const char *label, uint32_t now);
 

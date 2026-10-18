@@ -68,7 +68,10 @@ final class NimbusFileSystem: FSUnaryFileSystem, FSUnaryFileSystemOperations {
             throw fs_errorForPOSIXError(POSIXError.EIO.rawValue)
         }
         device = dev                       // keep the device alive as long as the volume
-        let vol = NimbusVolume(fs: fs, name: "NimbusFS")
+        var labelBuf = [CChar](repeating: 0, count: 33)
+        nbfs_shim_label(fs, &labelBuf, Int32(labelBuf.count))
+        let label = String(cString: labelBuf)                      // the name given at format time, e.g. "MYSTICK"
+        let vol = NimbusVolume(fs: fs, name: label.isEmpty ? "NimbusFS" : label)
         volume = vol
         containerStatus = .ready
         return vol

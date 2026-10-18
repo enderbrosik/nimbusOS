@@ -22,6 +22,14 @@ int nbfs_shim_format(void *ctx, nbfs_shim_io rd, nbfs_shim_wio wr, uint32_t sect
     return nbfs_format(&dev, label, now);
 }
 
+void nbfs_shim_label(nbfs_t *fs, char *out, int max)
+{
+    if (max <= 0) return;
+    int n = 0;
+    while (fs && n < max - 1 && n < (int)sizeof fs->sb.label && fs->sb.label[n]) { out[n] = fs->sb.label[n]; n++; }
+    out[n] = 0;
+}
+
 static int no_write(void *ctx, uint32_t lba, uint32_t count, const void *buf) { return -1; }
 
 int nbfs_shim_probe(void *ctx, nbfs_shim_io rd, uint32_t sectors)
