@@ -1,68 +1,117 @@
-# NimbusFS for macOS (FSKit file system extension)
+# NimbusFS for macOS
 
-Lets Finder and every Mac app open NimbusOS disk images, with no macFUSE. It uses Apple's FSKit (a user-space
-file system extension, no kernel extension) and the same `fs/nbfs.c` that NimbusOS itself uses.
+Open, read, write and **erase** NimbusOS disks (images and USB sticks) on a Mac, with no macFUSE and no kernel
+extension. Two small pieces, both user space, sharing `fs/nbfs.c` with NimbusOS itself:
 
-**Status: written without Xcode and never compiled.** The C layer (`NBFSShim`) builds and was checked on Linux.
-The Swift files follow the FSKit API as I know it up to macOS 26. You have macOS 27, so expect to fix a few
-signatures on the first build (Xcode's fix-it suggestions show the right ones). Send the errors if you get stuck.
+| Piece | What it does |
+|---|---|
+| **FSKit extension** (`macos/xcode`, Swift) | Mounts NimbusFS volumes: read, write, check. Finder, double-click, `mount`. |
+| **Format bundle** (`macos/fsbundle`, C) | Puts NimbusFS in Disk Utility's *Erase > Format* list and formats with `newfs_nimbusfs_fmt`. |
 
-## Build it (Xcode, about 10 minutes)
+Tested on macOS 27.0, Apple M4 Mac mini. Not supported: symbolic links, hard links, permissions/owners (NimbusFS does
+not store them), two writers at once. Unmount before you boot an image in QEMU. NimbusFS is limited to 4000 MiB.
 
-1. Install Xcode. Open it and choose **File ▸ New ▸ Project ▸ macOS ▸ App** (call it `NimbusFS`).
-2. **File ▸ New ▸ Target ▸ macOS ▸ File System Extension** (call it `NimbusFSExtension`). If the template is not
-   in the list, your Xcode is too old for FSKit.
-3. Delete the template's generated Swift files in the extension target and drag these in (target: the extension):
-   `NimbusFSExtensionMain.swift`, `NimbusFileSystem.swift`, `NimbusVolume.swift`, `NBFSShim.c`, `NBFSShim.h`, `NimbusFSExtension-Bridging-Header.h` and `../fs/nbfs.c`.
-4. In the extension target's **Build Settings**: *Objective-C Bridging Header* = the full path of `NimbusFSExtension-Bridging-Header.h`;
-   *Header Search Paths* = the repo root (so `../../fs/nbfs.h` resolves).
-5. In the extension's `Info.plist`, under `EXAppExtensionAttributes`, set `FSShortName` = `nimbusfs`, `FSPersonalities`
-   with `FSName` = `NimbusFS`, `FSMediaTypes` for a Basic Data / Linux partition type, and `FSSupportsBlockResources` = YES
-   (the Xcode template already contains these keys; fill in the values).
-6. Pick your Apple ID as the signing team (a free personal team is fine for local use) and Run.
-7. Enable it in **System Settings ▸ General ▸ Login Items & Extensions ▸ File System Extensions ▸ NimbusFS**.
-
-## Use it
-
-Attach an image as a block device (this only attaches the image file, it never touches a real disk), then mount:
-
-```sh
-dev=$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage /path/to/nimbus.img | awk 'NR==1{print $1}')
-mkdir -p ~/nimbus-mount
-mount -F -t nimbusfs $dev ~/nimbus-mount
-# ... use it in Finder ...
-umount ~/nimbus-mount && hdiutil detach $dev
-```
-
-NimbusOS images start with an MBR and the NimbusFS partition is the first partition, so mount the **partition**
-device (`/dev/diskNs1`), not the whole disk, for `nimbus.img`.
-
-## Not supported
-
-Symbolic links, hard links, permissions and owners (NimbusFS does not store them), and two writers at once.
-Unmount before you boot the image in QEMU.
-
-## Ready-made Xcode project
+## 1. Build and enable the extension
 
 `macos/xcode/NimbusFS.xcodeproj` is the working project (app + `NimbusFSExtension`).
-Open it, pick your own Team under Signing & Capabilities for both targets, then run.
 
-Mounting, as tested on macOS 27 (M4):
+1. Open it. Under **Signing & Capabilities** pick your own Team for both targets (a free personal team is fine).
+2. The extension's `Info.plist` (folder `NimbusFSExtension`) must look like this, in particular `FSShortName`,
+   `FSSupportsBlockResources` and the two `FSMediaTypes` entries:
 
-1. Run the app once from Xcode, then enable **NimbusFSExtension** in System Settings >
-   General > Login Items & Extensions > File System Extensions
-   (or `pluginkit -e use -i com.aaron.garsia.NimbusFS.NimbusFSExtension`).
-2. **Reboot** the first time. Until then `mount` may say
-   `No extension with fsShortName ... found` even though `pluginkit` lists it.
-   After a later rebuild, if that message comes back, reboot again.
-3. The extension's Info.plist needs `FSShortName` = `nimbusfs` and
-   `FSSupportsBlockResources` = `true`.
-4. Attach and mount (keep the image somewhere permanent; `/tmp` is cleared on reboot):
+```xml
+<key>FSMediaTypes</key>
+<dict>
+    <key>0x4E</key>   <!-- MBR partition type 0x4E: images made by nfstool mkdisk / the NimbusOS installer -->
+    <dict><key>FSMediaProperties</key><dict>
+        <key>Content Hint</key><string>0x4E</string><key>Leaf</key><true/></dict></dict>
+    <key>876437C4-C160-4036-ACF0-B48784DF0284</key>   <!-- GPT type GUID of NimbusFS: sticks erased on the Mac -->
+    <dict><key>FSMediaProperties</key><dict>
+        <key>Content Hint</key><string>876437C4-C160-4036-ACF0-B48784DF0284</string><key>Leaf</key><true/></dict></dict>
+</dict>
+<key>FSPersonalities</key>
+<dict><key>NimbusFSExtensionPersonality</key>
+    <dict><key>FSName</key><string>NimbusFS</string>
+          <key>FSfileObjectsAreCaseSensitive</key><false/></dict></dict>
+<key>FSShortName</key><string>nimbusfs</string>
+<key>FSSupportsBlockResources</key><true/>
+```
 
-       diskutil image attach --noMount ~/nimbus-test.img     # prints /dev/diskN, /dev/diskNs1 0x4E
-       mkdir -p ~/nimbus-mount
-       mount -F -t nimbusfs /dev/diskNs1 ~/nimbus-mount
-       umount ~/nimbus-mount && hdiutil detach /dev/diskN
+3. Press Run (⌘R), then install and enable it:
+
+```sh
+rm -rf /Applications/NimbusFS.app
+cp -R ~/Library/Developer/Xcode/DerivedData/NimbusFS-*/Build/Products/Debug/NimbusFS.app /Applications/
+open /Applications/NimbusFS.app
+pluginkit -e use -i com.aaron.garsia.NimbusFS.NimbusFSExtension      # a "+" in front of it in: pluginkit -m -p com.apple.fskit.fsmodule
+```
+
+4. **Reboot.** FSKit caches its extension list. Until you reboot, `mount` may say
+   `No extension with fsShortName ... found` even though `pluginkit` lists it. Reboot again after later rebuilds
+   if that message comes back.
+
+## 2. Mount images and sticks
+
+Double-click an image, or plug the stick in: it mounts in Finder under its label. The volume name is the label stored
+in the volume (`nbfs_shim_label`), e.g. `MYSTICK`; unlabelled volumes show as `NimbusFS`.
+
+By hand (raw devices are root-only, so a **stick** needs `sudo`; an image does not):
+
+```sh
+diskutil image attach --noMount ~/nimbus-test.img        # prints /dev/diskN and /dev/diskNs1
+mkdir -p ~/nimbus-mount
+mount -F -t nimbusfs /dev/diskNs1 ~/nimbus-mount          # sudo mount ... for a USB stick
+umount ~/nimbus-mount && hdiutil detach /dev/diskN
+```
+
+Keep images somewhere permanent: `/tmp` is cleared on reboot.
+
+## 3. Erase a disk as NimbusFS (Disk Utility)
+
+Disk Utility builds its Format list from bundles in `/Library/Filesystems` (like Paragon's `ufsd_ExtFS.fs`), not from the
+FSKit extension. `macos/fsbundle/nimbusfs_fmt.fs` is a format-only bundle: it declares the NimbusFS personality with
+its own GPT type GUID and ships `newfs_nimbusfs_fmt` (from `tools/newfs_nimbusfs.c`), which Disk Utility runs on the
+partition it creates. Mounting stays with the FSKit extension. The bundle is called `nimbusfs_fmt` on purpose, so the
+legacy `mount -t nimbusfs` does not pick it instead of the extension.
+
+```sh
+make                                  # builds build/nfstool and build/newfs_nimbusfs_fmt
+sh macos/fsbundle/install.sh          # copies the bundle to /Library/Filesystems (sudo)
+sh macos/fsbundle/uninstall.sh        # removes it again
+```
+
+Then quit and reopen Disk Utility, **View > Show All Devices**, select the *whole* stick, **Erase**, Format =
+**NimbusFS**, Scheme = **GUID Partition Map**. Re-run `make` and `install.sh` after pulling a new version.
+Check with `diskutil listFilesystems | grep -i nimbus`.
+
+Same thing from Terminal, with confirmations (it ERASES the disk you pick, and finds our partition by its GUID):
+
+```sh
+bash macos/fsbundle/format-nimbusfs-stick.sh MYSTICK
+```
+
+Or by hand: `diskutil partitionDisk /dev/diskN GPT "%876437C4-C160-4036-ACF0-B48784DF0284%" MYSTICK R`, then
+`sudo /Library/Filesystems/nimbusfs_fmt.fs/Contents/Resources/newfs_nimbusfs_fmt -V MYSTICK /dev/rdiskNsM`
+for the partition that carries that GUID (never go by position: macOS may add EFI or "Boot OS X" partitions).
+
+## 4. Make a stick with the host tools instead (any OS)
+
+`nfstool mkdisk` builds an image with an MBR and a type `0x4E` partition (the layout NimbusOS images use). Write it to
+the stick with `dd`. This **erases the stick**; `of=` is the stick, `if=` the image.
+
+```sh
+./build/nfstool mkdisk ~/stick.img 900 MYSTICK
+diskutil list external                                # the "(external, physical)" disk. The number changes at every plug-in!
+diskutil unmountDisk /dev/diskN
+sudo dd if=$HOME/stick.img of=/dev/rdiskN bs=4m
+```
+
+If macOS says "The disk you attached was not readable", click **Ignore**, never Initialize. A bare `nfstool mkfs`
+image (no partition table) is not offered to the extension; mount it by hand with `sudo mount -F -t nimbusfs /dev/diskN`.
+
+To check a stick from the host side, copy the **whole** partition (a truncated copy fails `nfstool` on purpose: the volume
+records its size) and make the copy yours: `sudo dd if=/dev/rdiskNsM of=$HOME/check.img bs=4m`,
+`sudo chown $(whoami) $HOME/check.img`, `./build/nfstool check $HOME/check.img`.
 
 ## Icons
 
@@ -76,38 +125,6 @@ Tried and **not working** on macOS 27 / FSKit, so do not retrace these:
 - Own file type / icon for `*.nimg` images (exported UTI conforming to `public.disk-image` or `public.data`):
   LaunchServices lists the type as registered, yet `UTType(filenameExtension: "nimg")` stayed `dyn.`.
   Keep using plain `.img` images; double-click mounting works for those.
-
-## USB sticks
-
-Use an MBR + `0x4E` partition (`nfstool mkdisk`) so macOS offers the stick to the extension on its own.
-A bare `nfstool mkfs` image has no partition table, so macOS says "not readable" and it needs a manual
-`sudo mount -F -t nimbusfs /dev/diskN <folder>`.
-
-    nfstool mkdisk ~/stick.img 900 STICK
-    diskutil list external                  # find the 2.0 GB "(external, physical)" disk, e.g. disk7. It changes every plug-in!
-    diskutil unmountDisk /dev/diskN
-    sudo dd if=$HOME/stick.img of=/dev/rdiskN bs=4m    # ERASES the stick. of= is the stick, if= the image.
-    # If macOS says "not readable", click Ignore (never Initialize).
-
-## Disk Utility "Erase" entry (experimental)
-
-Disk Utility builds its Erase > Format list from file system bundles in `/Library/Filesystems` (like Paragon's
-`ufsd_ExtFS.fs`), not from the FSKit extension. `macos/fsbundle/nimbusfs_fmt.fs` is a format-only bundle: it lists a
-NimbusFS personality and ships `newfs_nimbusfs_fmt` (built from `tools/newfs_nimbusfs.c`), which Disk Utility runs on the
-partition it creates. Mounting stays with the FSKit extension (`mount_nimbusfs_fmt` hands over to
-`mount -F -t nimbusfs`). The bundle is deliberately called `nimbusfs_fmt` so legacy `mount -t nimbusfs` does not pick it.
-
-    make
-    sh macos/fsbundle/install.sh        # copies it to /Library/Filesystems (sudo)
-    sh macos/fsbundle/uninstall.sh      # removes it again
-
-Untested on macOS. Try it on a disk image or a spare stick only.
-
-### One-command stick formatter (macOS)
-
-Disk Utility's Erase fails while building the partition map (MediaKit rejects the NimbusFS GUID given through the format
-entry), but `diskutil partitionDisk ... GPT "%876437C4-C160-4036-ACF0-B48784DF0284%" ...` works, and the extension mounts
-such a partition. `format-nimbusfs-stick.sh` does the whole sequence with confirmations. It ERASES the disk you pick.
-
-    sh macos/fsbundle/install.sh                       # once
-    bash macos/fsbundle/format-nimbusfs-stick.sh MYSTICK
+- Passing a partition type through the extension's own `FSPersonalities` (`FSFormatContentMask`): not picked up. The
+  format entry lives in the `/Library/Filesystems` bundle.
+- A kernel extension: not needed, and not realistic on Apple silicon.
