@@ -40,7 +40,9 @@ int main(int argc, char **argv)
     const char *label = "NimbusFS", *path = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "-v") || !strcmp(argv[i], "-n")) {
-            if (i + 1 < argc - 1) label = argv[++i];     /* the name, if one comes before the device */
+            /* the name, if one follows and is neither the last argument (the device) nor another option:
+             * Disk Utility calls us as  -V -v "Name" /dev/rdiskNsM */
+            if (i + 1 < argc - 1 && argv[i + 1][0] != '-') label = argv[++i];
         } else if (argv[i][0] != '-') {
             path = argv[i];                              /* the last non-option is the device */
         }
