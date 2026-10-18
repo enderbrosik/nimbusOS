@@ -42,7 +42,10 @@ if [ "$PSIZE" = R ]; then
 else
   diskutil partitionDisk "/dev/$ID" GPT "%$GUID%" "$LABEL" "$PSIZE" "Free Space" Free R
 fi
-PART="${ID}s2"; [ -e "/dev/$PART" ] || PART="${ID}s1"
+# find OUR partition by its type GUID (macOS may add other partitions, e.g. EFI or "Boot OS X", so never go by position)
+PART=$(diskutil list "$ID" | awk -v g="$GUID" 'index($0, g) { print $NF }')
+case "$PART" in disk[0-9]*s[0-9]*) ;; *) echo "could not find the NimbusFS partition on $ID"; exit 1;; esac
+[ "$(echo "$PART" | wc -l | tr -d ' ')" = 1 ] || { echo "found several NimbusFS partitions ($PART), refusing"; exit 1; }
 echo "formatting /dev/$PART"
 diskutil unmount "/dev/$PART" 2>/dev/null || true
 sudo "$NEWFS" -V "$LABEL" "/dev/r$PART"
