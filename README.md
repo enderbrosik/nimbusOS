@@ -21,6 +21,7 @@ apps) is original code: no existing kernel, libc or GUI library is used.
 ```sh
 make build        # -> build/nimbus.img (64 MiB bootable disk image)
 make run          # boot it in QEMU (serial log on the terminal)
+make run-novnc     # boot the live ISO with a writable disk; open http://localhost:6080/vnc.html
 make test         # host-side file system test suite
 make test-all     # host suite + every QEMU stage test (headless)
 ```
@@ -29,6 +30,7 @@ make test-all     # host suite + every QEMU stage test (headless)
 |---|---|
 | `make build` | Assembles the bootloader, compiles the kernel, builds the host tools, creates `build/nimbus.img` and populates its NimbusFS partition from `rootfs/` plus generated wallpapers |
 | `make run` | `qemu-system-x86_64 -m 256M -vga std` on the image, COM1 on stdio |
+| `make run-novnc` | Boots the live ISO, attaches a blank writable 64 MiB `build/target.img`, and serves the display through noVNC on port 6080 |
 | `make debug` | Same, but QEMU starts paused with a GDB stub on `:1234` (prints the `gdb` command to use; symbols come from `build/kernel.elf`) |
 | `make iso` | Builds the bootable live CD `build/nimbus.iso` |
 | `make run-iso` | Boots the ISO in QEMU as a CD-ROM |
@@ -89,7 +91,7 @@ python3 -m pip install pillow                               # optional
 
 **Debian / Ubuntu**
 ```sh
-sudo apt install build-essential nasm qemu-system-x86 clang lld python3-pil
+sudo apt install build-essential nasm qemu-system-x86 clang lld novnc python3-pil
 ```
 
 **Building x86_64-elf-gcc from source** (any Unix; see OSDev wiki "GCC Cross-Compiler"):

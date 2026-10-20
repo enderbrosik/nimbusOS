@@ -15,6 +15,7 @@
 BUILD   := build
 IMG     := $(BUILD)/nimbus.img
 IMG_MB  ?= 64
+TARGET_IMG ?= $(BUILD)/target.img
 
 # Release version (shown at boot, compared by NimbusUpdate) and the default
 # update server; `make release VERSION=0.3 UPDATE_URL=https://you.vercel.app`.
@@ -96,7 +97,7 @@ QEMU_VGA := -device VGA,vgamem_mb=64
 QEMU_COMMON := -m 256M $(QEMU_VGA) $(QEMU_SND) -drive file=$(IMG),format=raw,index=0,media=disk
 QEMU_EXTRA  ?=
 
-.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso programs release keys deploy FORCE
+.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso run-novnc programs release keys deploy FORCE
 all: build
 build: $(IMG)
 
@@ -260,6 +261,19 @@ $(ISO): $(CDIMG) $(MKISO)
 run-iso: $(ISO)
 	$(QEMU) -m 256M $(QEMU_VGA) $(QEMU_SND) -cdrom $(ISO) -boot d -serial stdio $(QEMU_EXTRA)
 
+# Boot the live CD with a writable target disk and expose its display through noVNC.
+NOVNC_PORT ?= 6080
+VNC_DISPLAY ?= 0
+NOVNC_WEB ?= /usr/share/novnc
+run-novnc: $(ISO) $(TARGET_IMG)
+	@command -v websockify >/dev/null || (echo "websockify not found - install noVNC/websockify" && false)
+	@test -d "$(NOVNC_WEB)" || (echo "noVNC web files not found at $(NOVNC_WEB) - set NOVNC_WEB=..." && false)
+	websockify --web=$(NOVNC_WEB) $(NOVNC_PORT) localhost:$$((5900 + $(VNC_DISPLAY))) & \
+	proxy=$$!; trap 'kill $$proxy 2>/dev/null || true' EXIT INT TERM; \
+	$(QEMU) -m 256M $(QEMU_VGA) $(QEMU_SND) -cdrom $(ISO) -boot d \
+	    -drive file=$(TARGET_IMG),format=raw,index=1,media=disk \
+	    -display none -vnc :$(VNC_DISPLAY) -serial stdio $(QEMU_EXTRA)
+
 run: $(IMG)
 	$(QEMU) $(QEMU_COMMON) -serial stdio $(QEMU_EXTRA)
 
@@ -272,8 +286,6 @@ debug: $(IMG)
 # A blank 64 MiB target disk image is created by `nfstool blank` (a sparse
 # regular file - no real devices are involved), attached as the second
 # drive (Primary Slave), and the live image boots from the first.
-TARGET_IMG ?= $(BUILD)/target.img
-
 $(TARGET_IMG): | $(NFSTOOL)
 	$(NFSTOOL) blank $@ 64
 

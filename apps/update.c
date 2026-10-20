@@ -64,7 +64,10 @@ static void paint(window_t *w)
 
     enum update_phase ph = update_phase(a->u);
     u32 col = ph == UPD_FAILED ? RGB(200, 40, 40) : ph == UPD_DONE || ph == UPD_UPTODATE ? RGB(30, 130, 60) : C_TEXT;
-    gfx_ui_text_ellipsis(s, 20, 138, update_status(a->u), s->w - 40, col);
+    const char *status = update_status(a->u);
+    if (ph == UPD_DONE && update_needs_restart(a->u))
+        status = "Update complete. Restart to apply (about 10 seconds)";
+    gfx_ui_text_ellipsis(s, 20, 138, status, s->w - 40, col);
 
     int y = 166;
     if (ph == UPD_DOWNLOADING || ph == UPD_DONE) {
