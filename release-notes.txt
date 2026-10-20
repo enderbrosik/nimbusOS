@@ -1,0 +1,3 @@
+NimbusOS 3.125
+
+- Added estimated update time in Nimbus Update

@@ -1,0 +1,5 @@
+{
+  "headers": [
+    { "source": "/(manifest|release-notes)(.*)", "headers": [ { "key": "Cache-Control", "value": "no-cache" } ] }
+  ]
+}
