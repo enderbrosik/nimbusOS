@@ -22,6 +22,7 @@ apps) is original code: no existing kernel, libc or GUI library is used.
 make build        # -> build/nimbus.img (64 MiB bootable disk image)
 make run          # boot it in QEMU (serial log on the terminal)
 make run-novnc     # boot the live ISO with a writable disk; open http://localhost:6080/vnc.html
+make package APP=hello # package a user-mode program as build/packages/hello.npkg
 make test         # host-side file system test suite
 make test-all     # host suite + every QEMU stage test (headless)
 ```
@@ -31,6 +32,7 @@ make test-all     # host suite + every QEMU stage test (headless)
 | `make build` | Assembles the bootloader, compiles the kernel, builds the host tools, creates `build/nimbus.img` and populates its NimbusFS partition from `rootfs/` plus generated wallpapers |
 | `make run` | `qemu-system-x86_64 -m 256M -vga std` on the image, COM1 on stdio |
 | `make run-novnc` | Boots the live ISO, attaches a blank writable 64 MiB `build/target.img`, and serves the display through noVNC on port 6080 |
+| `make package APP=name` | Packages `build/userroot/Programs/name.elf` as a Nimbus app package at `build/packages/name.npkg` |
 | `make debug` | Same, but QEMU starts paused with a GDB stub on `:1234` (prints the `gdb` command to use; symbols come from `build/kernel.elf`) |
 | `make iso` | Builds the bootable live CD `build/nimbus.iso` |
 | `make run-iso` | Boots the ISO in QEMU as a CD-ROM |
@@ -48,6 +50,10 @@ Add QEMU options with `QEMU_EXTRA`, e.g. `make run QEMU_EXTRA="-display sdl"`.
 > open block/character devices, and nothing uses `dd`, `fdisk`, `mkfs` or
 > `diskutil`. The installer only runs inside QEMU against the attached image
 > files, and only after an explicit confirmation (see Stage 7).
+
+## Credits
+
+The project credits are sourced from [`credits.txt`](./credits.txt). The website release page and README both reflect that same file so the project credits stay in one place.
 
 ## Live CD (`make iso`)
 
@@ -455,6 +461,11 @@ with `-mcmodel=large` (they live above 4 GiB) and no SSE.
 
 **Writing a program:** put `myprog.c` in `user/programs/` and run `make`. It
 is built, linked with `user/linker.ld` and installed as `/Programs/myprog.elf`.
+To create a distributable Nimbus app package, run `make package APP=myprog`;
+inside NimbusOS, run `install-app /path/to/myprog.npkg`. Packages contain the
+same native x86-64 ELF64 executable. Windows PE `.exe` files and macOS `.app`
+bundles are not supported. See [the project documentation](docs/README.md) for
+the package format, complete subsystem guides, testing, and Docker/noVNC setup.
 
 ## Nimbus Update: signed updates from your own server
 

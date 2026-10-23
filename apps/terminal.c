@@ -30,6 +30,7 @@
 #include "kernel/proc.h"
 #include "kernel/update.h"
 #include "kernel/version.h"
+#include "npkg.h"
 
 #define SCROLLBACK 500
 #define MAXCOL 160
@@ -234,6 +235,7 @@ static void cmd_help(struct term *t, int argc, char **argv)
         "  tree [path]         show a directory tree",
         "  stat <path>         show file metadata",
         "  open <path>         open with the associated application",
+        "  install-app <file>  install a Nimbus app package (.npkg)",
         "  df / mem / ps       disk, memory, tasks",
         "  date / uptime       clock and uptime",
         "  fsck                check the file system",
@@ -497,6 +499,65 @@ static void cmd_open(struct term *t, int argc, char **argv)
     app_open_path(p);
 }
 
+static bool npkg_name_char(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9') || c == '-' || c == '_';
+}
+
+static void cmd_install_app(struct term *t, int argc, char **argv)
+{
+    if (argc != 2) { out(C_ERR, "usage: install-app <file.npkg>\n"); return; }
+    char package_path[NBFS_PATH_MAX];
+    abs_path(t, argv[1], package_path);
+    char *data;
+    u32 len;
+    int r = vfs_read_all(package_path, &data, &len);
+    if (r) { err("install-app", argv[1], r); return; }
+    if (len < sizeof(struct npkg_header)) {
+        out(C_ERR, "install-app: package is truncated\n");
+        kfree(data);
+        return;
+    }
+    const struct npkg_header *h = (const struct npkg_header *)data;
+    if (memcmp(h->magic, NPKG_MAGIC, NPKG_MAGIC_SIZE) || h->version != NPKG_VERSION ||
+        !h->name_len || h->name_len > NPKG_NAME_MAX ||
+        h->name_len > len - sizeof(*h) ||
+        h->elf_size != len - sizeof(*h) - h->name_len) {
+        out(C_ERR, "install-app: invalid or unsupported package\n");
+        kfree(data);
+        return;
+    }
+    char name[NPKG_NAME_MAX + 1];
+    memcpy(name, data + sizeof(*h), h->name_len);
+    name[h->name_len] = 0;
+    for (u32 i = 0; i < h->name_len; i++) {
+        if (!npkg_name_char(name[i])) {
+            out(C_ERR, "install-app: invalid app name\n");
+            kfree(data);
+            return;
+        }
+    }
+    const u8 *elf = (const u8 *)data + sizeof(*h) + h->name_len;
+    if (h->elf_size < 20 || memcmp(elf, "\x7F" "ELF", 4) || elf[4] != 2 || elf[5] != 1 ||
+        elf[16] != 2 || elf[17] != 0 || elf[18] != 62 || elf[19] != 0) {
+        out(C_ERR, "install-app: package does not contain an x86-64 ELF64 executable\n");
+        kfree(data);
+        return;
+    }
+    char target[NBFS_PATH_MAX];
+    snprintf(target, sizeof target, "/Programs/%s.elf", name);
+    if (vfs_exists(target)) {
+        out(C_ERR, "install-app: %s already exists; refusing to overwrite it\n", target);
+        kfree(data);
+        return;
+    }
+    r = vfs_write_all(target, elf, (u32)h->elf_size);
+    kfree(data);
+    if (r) { err("install-app", target, r); return; }
+    out(C_PROMPT, "Installed %s to %s; run it with: %s\n", name, target, name);
+}
+
 static void cmd_history(struct term *t, int argc, char **argv)
 {
     for (int i = 0; i < t->nhist; i++) out(C_FG, "%4d  %s\n", i + 1, t->history[i]);
@@ -620,7 +681,7 @@ static const struct { const char *name; void (*fn)(struct term *, int, char **);
     { "stat", cmd_stat }, { "df", cmd_df }, { "mem", cmd_mem }, { "free", cmd_mem }, { "ps", cmd_ps },
     { "date", cmd_date }, { "uptime", cmd_uptime }, { "fsck", cmd_fsck }, { "open", cmd_open },
     { "history", cmd_history }, { "uname", cmd_uname }, { "play", cmd_play }, { "beep", cmd_beep },
-    { "volume", cmd_volume }, { "fat", cmd_fat },
+    { "volume", cmd_volume }, { "fat", cmd_fat }, { "install-app", cmd_install_app },
 };
 
 /* Find an executable: a path, or NAME / NAME.elf in the current directory

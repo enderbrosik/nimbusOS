@@ -14,6 +14,10 @@ NFS = "build/tools/nfstool"
 subprocess.check_call(["make", "-s", "build"], stdout=subprocess.DEVNULL)
 IMG = f"{S}/user.img"
 shutil.copy("build/nimbus.img", IMG)
+subprocess.check_call(["make", "-s", "build/tools/mknpkg"])
+PKG = f"{S}/hello-copy.npkg"
+subprocess.check_call(["build/tools/mknpkg", "build/userroot/Programs/hello.elf", PKG, "hello-copy"])
+subprocess.check_call([NFS, "put", IMG, PKG, "/Documents/hello-copy.npkg"])
 
 with Qemu([IMG], name="user") as q:
     q.wait_serial(r"Desktop ready", timeout=40)
@@ -37,6 +41,11 @@ with Qemu([IMG], name="user") as q:
         m = wait_new(r"\[proc\] pid (\d+) '%s' exited with code (%s)" % (name, code if code is not None else r"-?\d+"), timeout)
         wait_new(r"\[term\] program pid %s finished" % m.group(1), 5)
         return m
+
+    run("install-app /Documents/hello-copy.npkg")
+    run("hello-copy one two")
+    exited("hello-copy", 0)
+    assert 'argv[2] = "two"' in q.serial(), "installed package argv"
 
     # 1. arguments and output
     run("hello one two")

@@ -1,0 +1,23 @@
+NimbusOS 0.2
+
+- Nimbus Update: version numbers now read like decimals (3.2 is newer than 3.123, 3.121 newer than 3.12)
+- File Explorer: a plugged-in USB stick shows up as the folder /USB (browse, rename, delete, copy and move files between it and the system disk)
+- USB: USB sticks work (xHCI controller + mass storage); open one in the Terminal with the "fat" command
+- FAT32: read and write FAT32 disks (USB-stick style, with long file names) from the Terminal with the "fat" command: info, ls, cat, get, put, mkdir, rm
+- Nimbus Update: "What's new" is now a scrollable box (mouse wheel, scroll bar, arrow keys, Page Up/Down) with wrapped lines, so long release notes can be read in full
+- Web Browser: tables with real columns, borders, cell colours and nested tables, so old-style pages lay out properly
+- Web Browser: pictures (PNG, GIF and JPEG) load after the page, scaled to fit, and picture links work
+- Web Browser: forms with text boxes, buttons, check boxes and radio buttons (GET and POST), so search pages and their Next buttons work
+- Web Browser: lists with bullets and numbers, indents, rules, italic text, accented letters and real curly quotes
+- Web Browser: old HTML markup (font colours and sizes, align, body colours) and search pages with menus and icons display cleanly
+- Web Browser: user-agent switching from the UA button list (or Ctrl+U): NimbusOS, Chrome, Edge, Firefox, Safari, Android, Lynx); cookies are kept while the browser runs
+- Web Browser: search the web by typing words in the address bar (DuckDuckGo), result links go straight to the page, and links with queries, ../ and #fragments work
+- Text: the UI font is now anti-aliased DejaVu Sans, regular and bold, so text is smoother at every size
+- Web Browser: CSS support: <style> blocks, colours, bold, font sizes, centred and right-aligned text, underline, and hidden elements
+- Web Browser: headings use a larger font, and words no longer have stray gaps before punctuation
+- Cursor: choose the pointer style, size and colour in Settings > Cursor, or use your own small BMP picture as the pointer
+- Block Runner: an original side-scrolling jump game in the Start menu
+- Calculator: a four-function desk calculator in the Start menu, with keyboard input
+- Breakout: a brick-breaking game in the Start menu
+- System clipboard: Ctrl+C and Ctrl+V work in text fields, and Ctrl+Shift+C shows the clipboard history
+- Paint: transparent pen (first swatch), canvas sizes from 32x32 to 3840x2160 (Size, or Ctrl+W), and transparent pictures save with alpha

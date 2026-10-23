@@ -1,0 +1,16 @@
+NimbusOS credits
+================
+
+Project lead: enderbrosik (Me)
+Project homepage: https://github.com/enderbrosik/nimbusOS
+
+Thanks to the contributors, testers, and community members who keep NimbusOS growing.
+
+Major contributors and inspiration:
+- enderbrosik (me) for the original NimbusOS project and ongoing development
+- The OSDev and x86 assembly communities for ideas, examples, and inspiration
+- Everyone who reports bugs, shares feedback, and helps polish the desktop experience
+- My awesome teachers in Group 7 and Group 8 to motivate me and teach me stuff
+
+NimbusOS is built from original code for the bootloader, kernel, drivers, filesystem,
+GUI, and apps; no existing kernel, libc, or GUI library is used.

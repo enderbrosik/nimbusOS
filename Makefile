@@ -5,6 +5,7 @@
 #   make run      - boot it in QEMU
 #   make debug    - boot it in QEMU paused, with a GDB stub on :1234
 #   make test     - run the host-side file system test suite
+#   make site     - generate a local website preview in site-out/
 #   make clean    - remove build output
 #
 # Toolchain: uses x86_64-elf-gcc if it is on PATH, otherwise clang targeting
@@ -83,6 +84,16 @@ $(USERROOT)/Programs/Source/%.c: user/programs/%.c
 
 programs: $(UBINS) $(USRCS)
 
+$(BUILD)/tools/mknpkg: tools/mknpkg.c npkg.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) $< -o $@
+
+package: $(BUILD)/tools/mknpkg
+	@test -n "$(APP)" || (echo "usage: make package APP=<program-name>" && false)
+	@$(MAKE) $(USERROOT)/Programs/$(APP).elf
+	@mkdir -p $(BUILD)/packages
+	$(BUILD)/tools/mknpkg $(USERROOT)/Programs/$(APP).elf $(BUILD)/packages/$(APP).npkg $(APP)
+
 MBR     := $(BUILD)/boot/mbr.bin
 STAGE2  := $(BUILD)/boot/stage2.bin
 KELF    := $(BUILD)/kernel.elf
@@ -97,7 +108,7 @@ QEMU_VGA := -device VGA,vgamem_mb=64
 QEMU_COMMON := -m 256M $(QEMU_VGA) $(QEMU_SND) -drive file=$(IMG),format=raw,index=0,media=disk
 QEMU_EXTRA  ?=
 
-.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso run-novnc programs release keys deploy FORCE
+.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso run-novnc programs package release keys deploy site FORCE
 all: build
 build: $(IMG)
 
@@ -198,6 +209,11 @@ deploy: release
 	cd $(RELEASE_OUT) && vercel deploy --prod
 	@echo "Done. On NimbusOS, point the updater at your project's URL once: update url https://<project>.vercel.app"
 
+# Generate a local preview from the web template, and include update files
+# when `make release` has already populated build/update/.
+site:
+	sh tools/mksite.sh "$(VERSION)"
+
 # Calculator arithmetic (apps/calc_math.h) on the host.
 $(BUILD)/tools/calcmath: tools/calcmath.c apps/calc_math.h
 	@mkdir -p $(dir $@)
@@ -222,8 +238,9 @@ $(MKWALL): tools/mkwallpaper.c
 	@mkdir -p $(dir $@)
 	$(HOSTCC) $(HOSTCFLAGS) $< -o $@ -lm
 
-$(GENROOT)/.stamp: $(MKWALL)
+$(GENROOT)/.stamp: $(MKWALL) credits.txt
 	$(MKWALL) $(GENROOT)
+	cp credits.txt $(GENROOT)/credits.txt
 	@touch $@
 
 # The disk image: boot code + kernel, then a NimbusFS partition populated
@@ -265,14 +282,19 @@ run-iso: $(ISO)
 NOVNC_PORT ?= 6080
 VNC_DISPLAY ?= 0
 NOVNC_WEB ?= /usr/share/novnc
+NOVNC_WEB_ROOT := $(BUILD)/novnc-web
 run-novnc: $(ISO) $(TARGET_IMG)
 	@command -v websockify >/dev/null || (echo "websockify not found - install noVNC/websockify" && false)
 	@test -d "$(NOVNC_WEB)" || (echo "noVNC web files not found at $(NOVNC_WEB) - set NOVNC_WEB=..." && false)
-	websockify --web=$(NOVNC_WEB) $(NOVNC_PORT) localhost:$$((5900 + $(VNC_DISPLAY))) & \
+	@mkdir -p "$(NOVNC_WEB_ROOT)"
+	@ln -sfn "$(abspath $(NOVNC_WEB))/core" "$(NOVNC_WEB_ROOT)/core"
+	@ln -sfn "$(abspath $(NOVNC_WEB))/vendor" "$(NOVNC_WEB_ROOT)/vendor"
+	@cp tools/novnc/index.html tools/novnc/pointer-lock.js "$(NOVNC_WEB_ROOT)/"
+	websockify --web=$(NOVNC_WEB_ROOT) $(NOVNC_PORT) localhost:$$((5900 + $(VNC_DISPLAY))) & \
 	proxy=$$!; trap 'kill $$proxy 2>/dev/null || true' EXIT INT TERM; \
 	$(QEMU) -m 256M $(QEMU_VGA) $(QEMU_SND) -cdrom $(ISO) -boot d \
 	    -drive file=$(TARGET_IMG),format=raw,index=1,media=disk \
-	    -display none -vnc :$(VNC_DISPLAY) -serial stdio $(QEMU_EXTRA)
+	    -display none -vnc 127.0.0.1:$(VNC_DISPLAY) -serial stdio $(QEMU_EXTRA)
 
 run: $(IMG)
 	$(QEMU) $(QEMU_COMMON) -serial stdio $(QEMU_EXTRA)

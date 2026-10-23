@@ -57,6 +57,7 @@
     <div>
       <h1>NimbusOS</h1>
       <p class="tag">A hobby operating system for x86-64, written from scratch, with a Windows-style desktop.</p>
+      <p>All of this is open source and available on <a href="https://github.com/enderbrosik/nimbusos">GitHub</a>. PR's and more stuff is encouraged.</p>
     </div>
   </header>
 
@@ -70,6 +71,9 @@
 
   <h2>What's new in {{VERSION}}</h2>
   <ul>{{NOTES}}</ul>
+
+  <h2>Credits</h2>
+  <div class="card"><pre>{{CREDITS}}</pre></div>
 
   <h2>Run it</h2>
   <p>NimbusOS runs in <a href="https://www.qemu.org/">QEMU</a> (on a Mac: <code>brew install qemu</code>).
@@ -94,11 +98,9 @@ qemu-system-x86_64 -m 256M -vga std \
     <div class="card"><h3>From scratch</h3><p>Bootloader, 64-bit kernel, drivers, file system and GUI: no existing kernel, libc or GUI library.</p></div>
   </div>
 
-  <h2>Updates</h2>
-  <p>Installed systems check this site with Nimbus Update (Start menu, or <code>update</code> in the Terminal).
-     Every release is signed with Ed25519, so NimbusOS only installs updates from its publisher.</p>
+  {{UPDATE_SECTION}}
 
-  <footer>NimbusOS {{VERSION}} &middot; release notes: <a href="release-notes.txt">release-notes.txt</a> &middot; update manifest: <a href="manifest.txt">manifest.txt</a></footer>
+  <footer>NimbusOS {{VERSION}} &middot; release notes: <a href="release-notes.txt">release-notes.txt</a> &middot; credits: <a href="credits.txt">credits.txt</a>{{MANIFEST_LINK}}</footer>
 </main>
 </body>
 </html>

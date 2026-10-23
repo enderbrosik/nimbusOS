@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b7de0"/>
+      <stop offset="1" stop-color="#7cc3f5"/>
+    </linearGradient>
+    <linearGradient id="hill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3fae4a"/>
+      <stop offset="1" stop-color="#1f7a36"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded tile -->
+  <rect x="8" y="8" width="240" height="240" rx="48" fill="url(#sky)"/>
+  <!-- sun -->
+  <circle cx="186" cy="74" r="20" fill="#ffe27a"/>
+  <!-- cloud -->
+  <g fill="#ffffff">
+    <circle cx="96" cy="112" r="30"/>
+    <circle cx="136" cy="98" r="38"/>
+    <circle cx="170" cy="120" r="26"/>
+    <rect x="66" y="112" width="130" height="34" rx="17"/>
+  </g>
+  <!-- green hills -->
+  <path d="M8 196 Q70 150 132 180 T248 170 V248 H8 Z" fill="url(#hill)"/>
+  <path d="M8 218 Q90 190 170 214 T248 210 V248 H8 Z" fill="#2c8f3e" opacity="0.9"/>
+  <!-- wordmark-free: a small 'N' monogram on the cloud -->
+  <text x="128" y="136" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="700" text-anchor="middle" fill="#2b7de0">N</text>
+</svg>
