@@ -97,7 +97,7 @@ QEMU_VGA := -device VGA,vgamem_mb=64
 QEMU_COMMON := -m 256M $(QEMU_VGA) $(QEMU_SND) -drive file=$(IMG),format=raw,index=0,media=disk
 QEMU_EXTRA  ?=
 
-.PHONY: all build run debug clean test fsimage installer-test run-target test-all iso run-iso run-novnc programs release keys deploy FORCE
+.PHONY: all build run debug clean test jsrun test-js fsimage installer-test run-target test-all iso run-iso run-novnc programs release keys deploy FORCE
 all: build
 build: $(IMG)
 
@@ -203,6 +203,16 @@ $(BUILD)/tools/calcmath: tools/calcmath.c apps/calc_math.h
 	@mkdir -p $(dir $@)
 	$(HOSTCC) $(HOSTCFLAGS) tools/calcmath.c -o $@
 
+# JavaScript engine (js/): host build of the interpreter for the tests; the same sources build into the kernel later.
+JSSRCS := js/num.c js/obj.c js/parse.c js/eval.c js/builtins.c
+$(BUILD)/tools/jsrun: tools/jsrun.c $(JSSRCS) $(wildcard js/*.h)
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) tools/jsrun.c $(JSSRCS) -o $@
+
+jsrun: $(BUILD)/tools/jsrun
+test-js: $(BUILD)/tools/jsrun
+	python3 tools/test_js.py
+
 test: $(BUILD)/tools/fstest $(BUILD)/tools/cryptotest $(BUILD)/tools/calcmath
 	@mkdir -p $(BUILD)/test
 	$(BUILD)/tools/fstest
@@ -300,7 +310,7 @@ run-target:
 	$(QEMU) -m 256M $(QEMU_VGA) $(QEMU_SND) -drive file=$(TARGET_IMG),format=raw,index=0,media=disk -serial stdio $(QEMU_EXTRA)
 
 # Run every automated test (host FS suite + all QEMU stage tests).
-test-all: test $(IMG)
+test-all: test test-js $(IMG)
 	python3 tools/test_stage1.py
 	python3 tools/test_stage2.py
 	python3 tools/test_stage3.py
