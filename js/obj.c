@@ -7,6 +7,10 @@
 
 static void *cell_alloc(js_rt *rt, unsigned kind, unsigned size)
 {
+    if (rt->stack_base && !rt->in_gc && (rt->bytes > rt->gc_mark_bytes || (rt->gc_stress && ++rt->gc_stress_n >= rt->gc_stress))) {
+        rt->gc_stress_n = 0;
+        gc_run(rt);                                          /* collect in the middle of a script */
+    }
     gcc *c = (gcc *)JS_MALLOC(size);
     if (!c) {
         if (!rt->abort_msg) rt->abort_msg = "out of memory";
@@ -287,9 +291,84 @@ void js_pin(js_rt *rt, jsval v)
     rt->pins[rt->npins++] = v;
 }
 
+/* ---- conservative scan of the C stack ----------------------------------------------------------------------
+ * While a script runs, its temporaries (partly built arrays, scopes, operands) live only in C locals and registers.
+ * Every word on the C stack that points into a cell (or into an object's property/item arrays) keeps it alive.
+ * Words are collected, sorted, and each cell is looked up among them, so no index of the heap is needed. */
+
+static void sift_down(unsigned long *a, long n, long i)
+{
+    for (;;) {
+        long l = 2 * i + 1, r = l + 1, m = i;
+        if (l < n && a[l] > a[m]) m = l;
+        if (r < n && a[r] > a[m]) m = r;
+        if (m == i) return;
+        unsigned long t = a[i]; a[i] = a[m]; a[m] = t;
+        i = m;
+    }
+}
+
+static void heap_sort(unsigned long *a, long n)
+{
+    for (long i = n / 2 - 1; i >= 0; i--) sift_down(a, n, i);
+    for (long e = n - 1; e > 0; e--) { unsigned long t = a[0]; a[0] = a[e]; a[e] = t; sift_down(a, e, 0); }
+}
+
+/* is any candidate word inside [lo, hi)? */
+static int any_in(const unsigned long *c, long n, unsigned long lo, unsigned long hi)
+{
+    long a = 0, b = n;
+    while (a < b) { long m = (a + b) / 2; if (c[m] < lo) a = m + 1; else b = m; }
+    return a < n && c[a] < hi;
+}
+
+static unsigned long *g_cands; static long g_ncands; static int g_scan_ok;
+
+/* reads the raw stack on purpose, so address sanitizers must not check it */
+static void __attribute__((noinline, no_sanitize_address)) scan_stack(js_rt *rt)
+{
+    __builtin_unwind_init();                                 /* callee-saved registers are spilled into this frame */
+    volatile unsigned long marker = 0;
+    char *lo = (char *)&marker, *hi = rt->stack_base;
+    g_cands = NULL; g_ncands = 0; g_scan_ok = 1;
+    if (!hi || hi <= lo) return;
+    long words = (long)((hi - lo) / (long)sizeof(unsigned long));
+    unsigned long *c = (unsigned long *)JS_MALLOC((size_t)words * sizeof(unsigned long));
+    if (!c) { g_scan_ok = 0; return; }
+    long n = 0;
+    for (const unsigned long *w = (const unsigned long *)(((unsigned long)lo + 7) & ~7ul); (const char *)w < hi; w++)
+        if (*w > 4096) c[n++] = *w;
+    heap_sort(c, n);
+    g_cands = c; g_ncands = n;
+}
+
+static void mark_from_stack(js_rt *rt, gstack *st)
+{
+    if (!rt->stack_base) return;
+    scan_stack(rt);
+    if (!g_scan_ok) { st->oom = 1; return; }
+    for (gcc *c = rt->heap; c; c = c->next) {
+        unsigned long a = (unsigned long)c;
+        if (c->kind == GK_STR) {
+            if (!c->mark && any_in(g_cands, g_ncands, a, a + sizeof(jstr) + ((jstr *)c)->len)) c->mark = 1;
+        } else {
+            jsobj *o = (jsobj *)c;
+            int hit = any_in(g_cands, g_ncands, a, a + sizeof(jsobj));
+            if (!hit && o->props) hit = any_in(g_cands, g_ncands, (unsigned long)o->props, (unsigned long)o->props + (unsigned long)o->pcap * sizeof(prop));
+            if (!hit && o->items) hit = any_in(g_cands, g_ncands, (unsigned long)o->items, (unsigned long)o->items + (unsigned long)o->acap * sizeof(jsval));
+            if (!hit && o->bound_args) hit = any_in(g_cands, g_ncands, (unsigned long)o->bound_args, (unsigned long)o->bound_args + (unsigned long)o->nbound * sizeof(jsval));
+            if (hit) gpush(st, c);                            /* also marks everything it refers to */
+        }
+    }
+    if (g_cands) JS_FREE(g_cands);
+    g_cands = NULL;
+}
+
 void gc_run(js_rt *rt)
 {
     gstack st = { NULL, 0, 0, 0 };
+    if (rt->in_gc) return;
+    rt->in_gc = 1;
     for (gcc *c = rt->heap; c; c = c->next) c->mark = 0;
     for (unsigned i = 0; i < rt->atom_cap; i++) if (rt->atoms[i]) rt->atoms[i]->h.mark = 1;
     rt->dummy_str->h.mark = 1;
@@ -298,8 +377,9 @@ void gc_run(js_rt *rt)
     gobj(&st, rt->proto_object); gobj(&st, rt->proto_function); gobj(&st, rt->proto_array);
     gobj(&st, rt->proto_string); gobj(&st, rt->proto_number); gobj(&st, rt->proto_boolean);
     gobj(&st, rt->proto_error); gobj(&st, rt->proto_date);
-    gval(&st, rt->exc); gval(&st, rt->ret);
+    gval(&st, rt->exc); gval(&st, rt->ret); gval(&st, rt->completion);
     for (int i = 0; i < rt->npins; i++) gval(&st, rt->pins[i]);
+    mark_from_stack(rt, &st);
     while (st.n && !st.oom) {
         jsobj *o = (jsobj *)st.p[--st.n];
         gobj(&st, o->proto); gobj(&st, o->env); gobj(&st, o->outer); gobj(&st, o->bound_fn);
@@ -309,7 +389,7 @@ void gc_run(js_rt *rt)
         for (int i = 0; i < o->nbound; i++) gval(&st, o->bound_args[i]);
     }
     if (st.p) JS_FREE(st.p);
-    if (st.oom) return;                       /* could not finish marking: keep everything */
+    if (st.oom) { rt->in_gc = 0; return; }    /* could not finish marking: keep everything */
     gcc **pp = &rt->heap;
     while (*pp) {
         gcc *c = *pp;
@@ -327,4 +407,5 @@ void gc_run(js_rt *rt)
         JS_FREE(c);
     }
     rt->gc_mark_bytes = rt->bytes + GC_MIN_THRESHOLD > rt->bytes * 2 ? rt->bytes + GC_MIN_THRESHOLD : rt->bytes * 2;
+    rt->in_gc = 0;
 }

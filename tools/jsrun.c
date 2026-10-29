@@ -25,6 +25,8 @@ int main(int argc, char **argv)
     js_rt *rt = js_new(out, NULL);
     if (!rt) { fprintf(stderr, "jsrun: could not create runtime\n"); return 2; }
     js_set_clock(rt, clk, NULL);
+    if (getenv("JS_MAX_DEPTH")) js_set_limits(rt, 0, 0, atoi(getenv("JS_MAX_DEPTH")));
+    if (getenv("JS_GC_STRESS")) js_set_gc_stress(rt, (unsigned)atoi(getenv("JS_GC_STRESS")));
     char err[512];
     int r = js_eval(rt, src, (int)len, err, sizeof err);
     fflush(stdout);

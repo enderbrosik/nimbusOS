@@ -33,3 +33,14 @@ shorthand. `try/catch/finally`, `switch`, closures, prototypes and `new`, `call`
 
 `make test-js` runs `tools/test_js.py`: every case runs in this engine and in Node and the output must match.
 Also run clean under ASan/UBSan and about 5,500 fuzzed (randomly damaged) scripts without a crash.
+
+## Stage 2: DOM and the Web Browser
+
+`dom_tree.c` / `dom_js.c` give scripts a `document`, `window`, elements, events
+(bubbling), `setTimeout`/`setInterval`, `location` and `console`. The browser
+keeps the DOM as its own tree and serialises it back to HTML for the renderer;
+clickable elements carry `nimbus-js:ID` links. Timers run from the browser's
+50 ms timer. Ctrl+J turns scripts on or off. Only inline `<script>` blocks run;
+`<script src>` is skipped with a log line. Limits: 16 MB heap, 8M steps per
+script run, call depth 48. Tests: `make test-js` (host) and
+`tools/test_js_browser.py` (QEMU).

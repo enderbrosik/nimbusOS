@@ -1,0 +1,14 @@
+<html><head><title>JS test page</title></head><body>
+<h1 id="out">starting</h1>
+<button id="b" onclick="n++; document.getElementById('out').textContent = 'clicked ' + n; console.log('click ' + n)">Count</button>
+<p id="p">timer pending</p>
+<form id="f" action="/second.html"><input type="text" name="q" id="q" value="hi"> <input type="submit" value="Send"></form>
+<div id="d" onclick="console.log('div clicked')">click this text</div>
+<script>
+var n = 0;
+console.log('page script ran, title=' + document.title);
+document.getElementById('p').textContent = 'script wrote this';
+setTimeout(function () { document.getElementById('p').textContent = 'timer fired'; console.log('timer fired'); }, 500);
+document.getElementById('f').addEventListener('submit', function (e) { console.log('submit q=' + document.getElementById('q').value); });
+</script>
+</body></html>

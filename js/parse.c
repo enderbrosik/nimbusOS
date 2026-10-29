@@ -40,7 +40,11 @@ typedef struct {
     char *err; int errmax;
 } parser;
 
+#ifdef NIMBUS_KERNEL
+#define MAX_PARSE_DEPTH 80                  /* each level costs several C frames; the kernel stack is small */
+#else
 #define MAX_PARSE_DEPTH 160
+#endif
 
 static void perr(parser *p, const char *msg)
 {
@@ -363,7 +367,24 @@ static node *parse_object(parser *p)
             expect(p, T_RBRACK, "Expected ']'");
         } else if (p->tok.type == T_STR || is_name_token(p->tok.type)) {
             pr->str = p->tok.str;
+            int maybe_acc = p->tok.type == T_IDENT && p->tok.str->len == 3 && p->tok.str->s[1] == 'e' && p->tok.str->s[2] == 't' &&
+                            (p->tok.str->s[0] == 'g' || p->tok.str->s[0] == 's');
+            int is_get = maybe_acc && p->tok.str->s[0] == 'g';
             next(p);
+            if (maybe_acc && p->tok.type != T_COLON && p->tok.type != T_LPAREN && p->tok.type != T_COMMA && p->tok.type != T_RBRACE) {
+                if (p->tok.type == T_STR || is_name_token(p->tok.type)) { pr->str = p->tok.str; next(p); }
+                else if (p->tok.type == T_NUM) { char nb[40]; num_fmt(p->tok.num, nb); pr->str = atom_c(p->rt, nb); next(p); }
+                else { perr(p, "Unexpected token in object literal"); return NULL; }
+                pr->flag = (unsigned char)(is_get ? 1 : 2);
+                jstr *nm = pr->str;
+                node *f = parse_function(p, 0, 1);
+                if (!f) return NULL;
+                f->str = nm;
+                pr->b = f;
+                *tail = pr; tail = &pr->next;
+                if (!accept(p, T_COMMA)) break;
+                continue;
+            }
         } else if (p->tok.type == T_NUM) {
             char b[40]; num_fmt(p->tok.num, b);
             pr->str = atom_c(p->rt, b);

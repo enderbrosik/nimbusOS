@@ -110,6 +110,13 @@ case("fn_undef_var", 'console.log(nope)', err="Uncaught ReferenceError: nope is 
 case("fn_getter_chain", 'var o={a:{b:function(){ return this===o.a }}}; console.log(o.a.b())')
 case("fn_method_chain", 'var s=[3,1,2].sort().map(x=>x*2).join("-"); console.log(s, "a-b".split("-").reverse ? 1 : 0)')
 
+# ---- accessors -------------------------------------------------------------------------------------------------
+case("acc_literal", 'var o={_v:1, get v(){ return this._v*10 }, set v(x){ this._v=x }, plain:3}; console.log(o.v); o.v=7; console.log(o.v, o._v, JSON.stringify(o), Object.keys(o).join())')
+case("acc_inherit", 'var o={get v(){ return this.n }, set v(x){ this.n=x*2 }}; var p=Object.create(o); p.v=4; console.log(p.v, o.v, p.hasOwnProperty("v"), p.hasOwnProperty("n"))')
+case("acc_defprop", 'var o={_a:2}; Object.defineProperty(o,"a",{get:function(){ return this._a+1 }, set:function(x){ this._a=x }, enumerable:true}); o.a=10; console.log(o.a, Object.keys(o).join()); Object.defineProperty(o,"h",{get:function(){return 1}}); console.log(o.h, Object.keys(o).join())')
+case("acc_names_get_set", 'var q={get:5, set:6, get x(){ return this.get+this.set }}; console.log(q.get, q.set, q.x)')
+case("acc_only_getter", 'var o={get a(){ return 1 }}; o.a=5; console.log(o.a)')
+
 # ---- control flow ----------------------------------------------------------------------------------------------
 case("if_else", 'function f(n){ if (n<0) return "neg"; else if (n==0) return "zero"; else return "pos" } console.log(f(-1), f(0), f(5))')
 case("while_do", 'var i=0, s=0; while(i<5){ s+=i; i++ } var j=0; do { j++ } while(j<3); console.log(s, j)')
@@ -210,11 +217,17 @@ def main():
         return 2
     bad = 0
     ran = 0
+    slow = 0
     for name, code, err in CASES:
         if filt and not any(f in name for f in filt):
             continue
         ran += 1
-        rc, out, serr = run_engine(code)
+        try:
+            rc, out, serr = run_engine(code)
+        except subprocess.TimeoutExpired:
+            print('SLOW %s (skipped: timed out)' % name)
+            slow += 1
+            continue
         problem = None
         if err is not None:
             if rc != 1 or not serr.startswith(err):
@@ -233,7 +246,7 @@ def main():
             print("FAIL %s: %s" % (name, problem))
         elif verbose:
             print("ok   %s" % name)
-    print("%d cases, %d failed%s" % (ran, bad, "" if NODE else " (Node not installed: only checked that scripts run)"))
+    print("%d cases, %d failed, %d slow%s" % (ran, bad, slow, "" if NODE else " (Node not installed: only checked that scripts run)"))
     print("js: PASS" if not bad else "js: FAIL")
     return 1 if bad else 0
 

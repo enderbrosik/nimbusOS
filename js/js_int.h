@@ -69,7 +69,8 @@ typedef jsval (*js_native)(js_rt *rt, jsval thisv, jsval *args, int nargs);
 
 typedef struct { jstr *key; jsval val; unsigned char flags; } prop;
 #define PF_HIDDEN 1            /* not enumerable */
-#define PF_CONST  2            /* const binding: assignment throws */
+#define PF_CONST  2            /* const binding / read-only property */
+#define PF_ACCESSOR 4          /* getter/setter: val is an array [getter, setter] */
 
 enum { CL_OBJECT, CL_ARRAY, CL_FUNCTION, CL_SCOPE, CL_ERROR, CL_DATE };
 
@@ -141,6 +142,11 @@ struct js_rt {
          *a_empty, *a_arguments, *a_this, *a_index, *a_undefined, *a_null, *a_true, *a_false, *a_object,
          *a_function, *a_number, *a_string, *a_boolean, *a_nan, *a_infinity, *a_get, *a_set, *a_callee;
     long long (*clock)(void *ud); void *clock_ud;   /* milliseconds since 1970, for Date */
+    void *dom;                              /* the DOM layer (dom.c), if this runtime belongs to a page */
+    char *stack_base;                       /* C stack address the running script started from (for the conservative GC scan) */
+    int in_gc;
+    unsigned gc_stress, gc_stress_n;        /* testing: collect every gc_stress allocations */
+    jsval completion;                       /* value of the last expression statement run */
     int cur_magic, cur_new;                 /* set before a native function runs */
     int scratch_depth;
 };
@@ -162,6 +168,8 @@ void   prop_put(js_rt *rt, jsobj *o, jstr *key, jsval v, int flags);   /* define
 int    prop_del(jsobj *o, jstr *key);
 void   js_pin(js_rt *rt, jsval v);
 void   gc_run(js_rt *rt);
+#define RT_ENTER(rt) char *rt_saved_base_ = (rt)->stack_base; if (!rt_saved_base_) (rt)->stack_base = (char *)__builtin_frame_address(0)
+#define RT_LEAVE(rt) do { if (!rt_saved_base_) (rt)->stack_base = NULL; } while (0)
 void  *arena_alloc(js_rt *rt, unsigned n);
 
 /* string builder */
@@ -194,6 +202,9 @@ int    js_run(js_rt *rt, node *prog, char *err, int errmax);
 jsobj *own_keys(js_rt *rt, jsobj *o, int all);              /* array of key strings (enumerable only unless all) */
 jsobj *make_closure(js_rt *rt, node *f, jsobj *scope);
 void   set_hidden(js_rt *rt, jsobj *o, const char *name, jsval v);
+void   def_accessor(js_rt *rt, jsobj *o, const char *name, js_native getter, js_native setter, int magic);
+void   put_accessor(js_rt *rt, jsobj *o, jstr *key, jsval getter, jsval setter, int flags);
+int    js_eval_value(js_rt *rt, const char *src, int len, jsval *out, char *err, int errmax);   /* value of the last expression */
 
 /* parser (parse.c) */
 node  *js_parse(js_rt *rt, const char *src, int len, char *err, int errmax);

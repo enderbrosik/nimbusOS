@@ -23,6 +23,7 @@ int    js_eval(js_rt *rt, const char *src, int len, char *err, int errmax);
 
 /* Frees everything no longer reachable. Only call it when no script is running. */
 void   js_gc(js_rt *rt);
+void   js_set_gc_stress(js_rt *rt, unsigned every_n_allocs);   /* testing only: collect very often */
 unsigned long js_mem_used(js_rt *rt);
 
 #endif

@@ -25,6 +25,13 @@ void def_native(js_rt *rt, jsobj *o, const char *name, js_native fn, int nargs, 
 
 void set_hidden(js_rt *rt, jsobj *o, const char *name, jsval v) { prop_put(rt, o, atom_c(rt, name), v, PF_HIDDEN); }
 
+void def_accessor(js_rt *rt, jsobj *o, const char *name, js_native getter, js_native setter, int magic)
+{
+    jsval g = getter ? v_obj(native_new(rt, name, getter, 0, magic)) : v_undef();
+    jsval st = setter ? v_obj(native_new(rt, name, setter, 1, magic)) : v_undef();
+    put_accessor(rt, o, atom_c(rt, name), g, st, PF_HIDDEN);
+}
+
 /* ---- helpers ----------------------------------------------------------------------------------------------- */
 
 static long long rel_index(js_rt *rt, jsval v, long long len, long long dflt)
@@ -143,7 +150,10 @@ void inspect(js_rt *rt, jsval v, sbuf *b, int depth, int top)
         jstr *k = o->props[i].key;
         if (is_ident(k)) sb_add(b, k->s, k->len); else quote_str(b, k);
         sb_adds(b, ": ");
-        inspect(rt, o->props[i].val, b, depth + 1, 0);
+        if (o->props[i].flags & PF_ACCESSOR) {
+            jsobj *h = o->props[i].val.u.o;
+            sb_adds(b, is_callable(h->items[0]) ? (is_callable(h->items[1]) ? "[Getter/Setter]" : "[Getter]") : "[Setter]");
+        } else inspect(rt, o->props[i].val, b, depth + 1, 0);
     }
     sb_adds(b, " }");
 }
@@ -258,6 +268,8 @@ static jsval n_Object_defineProperty(js_rt *rt, jsval thisv, jsval *args, int na
     jsval val = get_prop(rt, d, atom_c(rt, "value")); RET_IF_BAD();
     jsval en = get_prop(rt, d, atom_c(rt, "enumerable")), wr = get_prop(rt, d, atom_c(rt, "writable"));
     int flags = (to_bool(en) ? 0 : PF_HIDDEN) | (to_bool(wr) ? 0 : PF_CONST);
+    jsval gt = get_prop(rt, d, rt->a_get), st = get_prop(rt, d, rt->a_set); RET_IF_BAD();
+    if (is_callable(gt) || is_callable(st)) { put_accessor(rt, o, key, is_callable(gt) ? gt : U, is_callable(st) ? st : U, to_bool(en) ? 0 : PF_HIDDEN); return ARG(0); }
     if (o->cls == CL_ARRAY) { set_prop(rt, ARG(0), key, val); return ARG(0); }
     prop *p = prop_find(o, key);
     if (p) { p->val = val; p->flags = (unsigned char)flags; } else prop_put(rt, o, key, val, flags);
@@ -614,8 +626,9 @@ static jsval n_arr_sort(js_rt *rt, jsval thisv, jsval *args, int nargs)
     if (f.t != JT_UNDEF && !is_callable(f)) return throw_error(rt, "TypeError", "The comparison function must be either a function or undefined", NULL, NULL);
     unsigned n = a->alen;
     if (n < 2) return thisv;
-    jsval *tmp = (jsval *)JS_MALLOC((size_t)n * sizeof(jsval));
-    if (!tmp) { rt->abort_msg = "out of memory"; return U; }
+    jsobj *tmpo = arr_new(rt, n);                             /* a heap array: the collector sees the values being merged */
+    if (tmpo->alen != n) return U;
+    jsval *tmp = tmpo->items;
     int err = 0;
     for (unsigned w = 1; w < n && !err; w *= 2) {                 /* bottom-up merge sort (stable) */
         for (unsigned lo = 0; lo < n && !err; lo += 2 * w) {
@@ -632,7 +645,6 @@ static jsval n_arr_sort(js_rt *rt, jsval thisv, jsval *args, int nargs)
         }
         if (!err) memcpy(a->items, tmp, (size_t)n * sizeof(jsval));
     }
-    JS_FREE(tmp);
     return err ? U : thisv;
 }
 
@@ -1108,7 +1120,8 @@ static int json_write(js_rt *rt, jsval v, sbuf *b, jstr *ind, int level)
     for (int i = 0; i < o->np; i++) {
         if (o->props[i].flags & PF_HIDDEN) continue;
         sbuf tmp; sb_init(&tmp);
-        int ok = json_write(rt, o->props[i].val, &tmp, ind, level + 1);
+        jsval pv = (o->props[i].flags & PF_ACCESSOR) ? get_prop(rt, v, o->props[i].key) : o->props[i].val;
+        int ok = NOVAL(rt) ? 0 : json_write(rt, pv, &tmp, ind, level + 1);
         if (NOVAL(rt)) { sb_free(&tmp); return 0; }
         if (ok) {
             if (!first) sb_addc(b, ',');
@@ -1635,6 +1648,7 @@ void js_set_clock(js_rt *rt, long long (*fn)(void *ud), void *ud) { rt->clock = 
 unsigned long js_mem_used(js_rt *rt) { return rt->bytes; }
 
 void js_gc(js_rt *rt) { gc_run(rt); }
+void js_set_gc_stress(js_rt *rt, unsigned n) { rt->gc_stress = n; }
 
 int js_eval(js_rt *rt, const char *src, int len, char *err, int errmax)
 {
@@ -1647,5 +1661,21 @@ int js_eval(js_rt *rt, const char *src, int len, char *err, int errmax)
     }
     int r = js_run(rt, prog, err, errmax);
     if (rt->bytes > rt->gc_mark_bytes) gc_run(rt);
+    return r;
+}
+
+/* Runs source and returns the value of its last expression statement (used for onclick="..." attributes). */
+int js_eval_value(js_rt *rt, const char *src, int len, jsval *out, char *err, int errmax)
+{
+    rt->abort_msg = NULL;
+    rt->completion = v_undef();
+    node *prog = js_parse(rt, src, len, err, errmax);
+    if (!prog) {
+        if (err && errmax > 0 && !err[0]) { const char *m = "SyntaxError: parse failed"; int n = 0; while (m[n] && n < errmax - 1) { err[n] = m[n]; n++; } err[n] = 0; }
+        rt->abort_msg = NULL;
+        return 1;
+    }
+    int r = js_run(rt, prog, err, errmax);
+    if (out) *out = r ? v_undef() : rt->completion;
     return r;
 }

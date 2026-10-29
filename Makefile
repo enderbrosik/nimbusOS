@@ -48,7 +48,7 @@ CFLAGS  := $(TARGET_FLAG) -std=gnu11 -ffreestanding -fno-builtin -nostdlib -nost
 LDFLAGS := -m elf_x86_64 -z max-page-size=4096 -T arch/x86/linker.ld -nostdlib
 HOSTCFLAGS := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -I.
 
-KDIRS   := kernel arch/x86 drivers fs gui apps installer net
+KDIRS   := kernel arch/x86 drivers fs gui apps installer net js
 KSRCS   := $(foreach d,$(KDIRS),$(wildcard $(d)/*.c))
 KASMS   := arch/x86/entry.asm arch/x86/isr.asm
 KOBJS   := $(patsubst %.asm,$(BUILD)/%.o,$(KASMS)) $(patsubst %.c,$(BUILD)/%.o,$(KSRCS))
@@ -204,14 +204,19 @@ $(BUILD)/tools/calcmath: tools/calcmath.c apps/calc_math.h
 	$(HOSTCC) $(HOSTCFLAGS) tools/calcmath.c -o $@
 
 # JavaScript engine (js/): host build of the interpreter for the tests; the same sources build into the kernel later.
-JSSRCS := js/num.c js/obj.c js/parse.c js/eval.c js/builtins.c
+JSSRCS := js/num.c js/obj.c js/parse.c js/eval.c js/builtins.c js/dom_tree.c js/dom_js.c
 $(BUILD)/tools/jsrun: tools/jsrun.c $(JSSRCS) $(wildcard js/*.h)
 	@mkdir -p $(dir $@)
 	$(HOSTCC) $(HOSTCFLAGS) tools/jsrun.c $(JSSRCS) -o $@
 
-jsrun: $(BUILD)/tools/jsrun
-test-js: $(BUILD)/tools/jsrun
+$(BUILD)/tools/domrun: tools/domrun.c $(JSSRCS) $(wildcard js/*.h)
+	@mkdir -p $(dir $@)
+	$(HOSTCC) $(HOSTCFLAGS) tools/domrun.c $(JSSRCS) -o $@
+
+jsrun: $(BUILD)/tools/jsrun $(BUILD)/tools/domrun
+test-js: $(BUILD)/tools/jsrun $(BUILD)/tools/domrun
 	python3 tools/test_js.py
+	python3 tools/test_dom.py
 
 test: $(BUILD)/tools/fstest $(BUILD)/tools/cryptotest $(BUILD)/tools/calcmath
 	@mkdir -p $(BUILD)/test
@@ -330,6 +335,7 @@ test-all: test test-js $(IMG)
 	python3 tools/test_https.py
 	python3 tools/test_css.py
 	python3 tools/test_search.py
+	python3 tools/test_js_browser.py
 	python3 tools/test_imgdec.py
 	python3 tools/test_images.py
 	python3 tools/test_update.py

@@ -148,13 +148,38 @@ int loose_eq(js_rt *rt, jsval a, jsval b)
 
 /* ---- property access --------------------------------------------------------------------------------------- */
 
-static jsval lookup_chain(jsobj *o, jstr *key)
+static jsval prop_value(js_rt *rt, prop *p, jsval receiver)
+{
+    if (!(p->flags & PF_ACCESSOR)) return p->val;
+    jsval g = p->val.u.o->items[0];
+    return is_callable(g) ? call_fn(rt, g, receiver, NULL, 0) : v_undef();
+}
+
+static jsval lookup_chain(js_rt *rt, jsobj *o, jstr *key, jsval receiver)
 {
     for (; o; o = o->proto) {
         prop *p = prop_find(o, key);
-        if (p) return p->val;
+        if (p) return prop_value(rt, p, receiver);
     }
     return v_undef();
+}
+
+static jsval var_value(js_rt *rt, prop *p) { return (p->flags & PF_ACCESSOR) ? prop_value(rt, p, v_obj(rt->global)) : p->val; }
+
+void put_accessor(js_rt *rt, jsobj *o, jstr *key, jsval getter, jsval setter, int flags)
+{
+    prop *p = prop_find(o, key);
+    jsobj *h;
+    if (p && (p->flags & PF_ACCESSOR)) h = p->val.u.o;
+    else {
+        h = arr_new(rt, 2);
+        if (h->alen < 2) return;
+        h->items[0] = v_undef(); h->items[1] = v_undef();
+        if (p) { p->val = v_obj(h); p->flags = (unsigned char)(flags | PF_ACCESSOR); }
+        else prop_put(rt, o, key, v_obj(h), flags | PF_ACCESSOR);
+    }
+    if (getter.t != JT_UNDEF) h->items[0] = getter;
+    if (setter.t != JT_UNDEF) h->items[1] = setter;
 }
 
 static int has_chain(jsobj *o, jstr *key)
@@ -190,17 +215,17 @@ jsval get_prop(js_rt *rt, jsval base, jstr *key)
                 if (key == rt->a_length) return v_num(num_from_int(o->fnode ? o->fnode->nparams : 0));
             }
         }
-        return lookup_chain(o, key);
+        return lookup_chain(rt, o, key, base);
     }
     case JT_STR: {
         jstr *s = base.u.s;
         if (key == rt->a_length) return v_num(num_from_int(s->len));
         unsigned idx;
         if (atom_index(key, &idx)) return idx < s->len ? v_str(str_new(rt, s->s + idx, 1)) : U;
-        return lookup_chain(rt->proto_string, key);
+        return lookup_chain(rt, rt->proto_string, key, base);
     }
-    case JT_NUM: return lookup_chain(rt->proto_number, key);
-    case JT_BOOL: return lookup_chain(rt->proto_boolean, key);
+    case JT_NUM: return lookup_chain(rt, rt->proto_number, key, base);
+    case JT_BOOL: return lookup_chain(rt, rt->proto_boolean, key, base);
     default: {
         sbuf b; sb_init(&b);
         sb_adds(&b, "Cannot read properties of "); sb_adds(&b, base.t == JT_NULL ? "null" : "undefined");
@@ -258,6 +283,16 @@ void set_prop(js_rt *rt, jsval base, jstr *key, jsval v)
             return;
         }
     }
+    for (jsobj *x = o; x; x = x->proto) {                       /* a setter anywhere on the chain handles the assignment */
+        prop *ap = prop_find(x, key);
+        if (!ap) continue;
+        if (ap->flags & PF_ACCESSOR) {
+            jsval st = ap->val.u.o->items[1];
+            if (is_callable(st)) call_fn(rt, st, base, &v, 1);
+            return;
+        }
+        break;
+    }
     if (!o->extensible && !prop_find(o, key)) return;
     prop *p = prop_find(o, key);
     if (p && (p->flags & PF_CONST)) return;                    /* read-only: ignored, as in sloppy mode */
@@ -311,6 +346,11 @@ static void assign_var(js_rt *rt, jsobj *sc, jstr *name, jsval v)
 {
     prop *p = scope_find(sc, name, NULL);
     if (p) {
+        if (p->flags & PF_ACCESSOR) {
+            jsval st = p->val.u.o->items[1];
+            if (is_callable(st)) call_fn(rt, st, v_obj(rt->global), &v, 1);
+            return;
+        }
         if (p->flags & PF_CONST) { throw_error(rt, "TypeError", "Assignment to constant variable.", NULL, NULL); return; }
         p->val = v;
         return;
@@ -358,13 +398,11 @@ jsval call_fn(js_rt *rt, jsval fnv, jsval thisv, jsval *args, int nargs)
     jsval result = U;
     if (f->bound_fn) {
         int total = f->nbound + nargs;
-        jsval *all = (jsval *)JS_MALLOC((size_t)(total ? total : 1) * sizeof(jsval));
-        if (!all) rt->abort_msg = "out of memory";
-        else {
-            for (int i = 0; i < f->nbound; i++) all[i] = f->bound_args[i];
-            for (int i = 0; i < nargs; i++) all[f->nbound + i] = args[i];
-            result = call_fn(rt, v_obj(f->bound_fn), f->bound_this, all, total);
-            JS_FREE(all);
+        jsobj *all = arr_new(rt, (unsigned)total);            /* a heap array, so the collector sees what it holds */
+        if (all->alen == (unsigned)total) {
+            for (int i = 0; i < f->nbound; i++) all->items[i] = f->bound_args[i];
+            for (int i = 0; i < nargs; i++) all->items[f->nbound + i] = args[i];
+            result = call_fn(rt, v_obj(f->bound_fn), f->bound_this, all->items, total);
         }
     } else if (f->native) {
         rt->cur_magic = f->magic;
@@ -563,6 +601,19 @@ jsobj *own_keys(js_rt *rt, jsobj *o, int all)
 
 /* ---- expressions ------------------------------------------------------------------------------------------- */
 
+/* Builds an argument list: the first 8 live on the C stack, more spill into a heap array object. */
+static int push_arg(js_rt *rt, jsval *stackargs, int *argc, jsobj **spill, jsval v)
+{
+    if (!*spill) {
+        if (*argc < 8) { stackargs[(*argc)++] = v; return 1; }
+        *spill = arr_new(rt, 0);
+        for (int i = 0; i < *argc; i++) arr_push(rt, *spill, stackargs[i]);
+    }
+    arr_push(rt, *spill, v);
+    (*argc)++;
+    return !rt->abort_msg;
+}
+
 static jsval eval_args_call(js_rt *rt, node *call, jsobj *sc);
 
 static int spread_into(js_rt *rt, jsobj *dst, jsval src)
@@ -605,7 +656,7 @@ static jsval eval(js_rt *rt, node *n, jsobj *sc)
     case N_THIS: return this_value(rt, sc);
     case N_IDENT: {
         prop *p = scope_find(sc, n->str, NULL);
-        if (p) return p->val;
+        if (p) return var_value(rt, p);
         if (n->str == rt->a_undefined) return U;
         sbuf b; sb_init(&b); sb_add(&b, n->str->s, n->str->len); sb_adds(&b, " is not defined");
         throw_error(rt, "ReferenceError", b.p, NULL, NULL);
@@ -647,9 +698,8 @@ static jsval eval(js_rt *rt, node *n, jsobj *sc)
             if (pr->a) { jsval k = eval(rt, pr->a, sc); BAIL(U); key = to_key_atom(rt, k); BAIL(U); }
             jsval v = eval(rt, pr->b, sc);
             BAIL(U);
+            if (pr->flag) { put_accessor(rt, o, key, pr->flag == 1 ? v : U, pr->flag == 2 ? v : U, 0); continue; }
             if (v.t == JT_OBJ && v.u.o->cls == CL_FUNCTION && v.u.o->fnode && !v.u.o->fnode->str) v.u.o->fnode->str = key;
-            unsigned idx;
-            (void)idx;
             prop_put(rt, o, key, v, 0);
         }
         return v_obj(o);
@@ -667,35 +717,27 @@ static jsval eval(js_rt *rt, node *n, jsobj *sc)
     case N_CALL: return eval_args_call(rt, n, sc);
     case N_NEW: {
         jsval fn = eval(rt, n->a, sc); BAIL(U);
-        int cap = 8, argc = 0;
-        jsval stackargs[8], *args = stackargs, *heap = NULL;
+        int argc = 0;
+        jsval stackargs[8];
+        jsobj *spill = NULL;
         for (node *a = n->b; a; a = a->next) {
             if (a->type == N_SPREAD) {
-                jsval s = eval(rt, a->a, sc);
-                if (NOVAL(rt)) { if (heap) JS_FREE(heap); return U; }
+                jsval sv = eval(rt, a->a, sc); BAIL(U);
                 jsobj *tmp = arr_new(rt, 0);
-                if (!spread_into(rt, tmp, s)) { if (heap) JS_FREE(heap); return U; }
-                for (unsigned k = 0; k < tmp->alen; k++) {
-                    if (argc == cap) { cap *= 2; jsval *nh = (jsval *)JS_MALLOC((size_t)cap * sizeof(jsval)); if (!nh) { rt->abort_msg = "out of memory"; if (heap) JS_FREE(heap); return U; } memcpy(nh, args, (size_t)argc * sizeof(jsval)); if (heap) JS_FREE(heap); heap = nh; args = nh; }
-                    args[argc++] = tmp->items[k];
-                }
+                if (!spread_into(rt, tmp, sv)) return U;
+                for (unsigned k = 0; k < tmp->alen; k++) if (!push_arg(rt, stackargs, &argc, &spill, tmp->items[k])) return U;
                 continue;
             }
-            jsval v = eval(rt, a, sc);
-            if (NOVAL(rt)) { if (heap) JS_FREE(heap); return U; }
-            if (argc == cap) { cap *= 2; jsval *nh = (jsval *)JS_MALLOC((size_t)cap * sizeof(jsval)); if (!nh) { rt->abort_msg = "out of memory"; if (heap) JS_FREE(heap); return U; } memcpy(nh, args, (size_t)argc * sizeof(jsval)); if (heap) JS_FREE(heap); heap = nh; args = nh; }
-            args[argc++] = v;
+            jsval v = eval(rt, a, sc); BAIL(U);
+            if (!push_arg(rt, stackargs, &argc, &spill, v)) return U;
         }
         if (!is_callable(fn) || fn.u.o->is_arrow) {
             sbuf b; sb_init(&b); describe(n->a, &b, 0); sb_adds(&b, " is not a constructor");
             throw_error(rt, "TypeError", b.p, NULL, NULL);
             sb_free(&b);
-            if (heap) JS_FREE(heap);
             return U;
         }
-        jsval r = construct(rt, fn, args, argc);
-        if (heap) JS_FREE(heap);
-        return r;
+        return construct(rt, fn, spill ? spill->items : stackargs, argc);
     }
     case N_UNARY: {
         if (n->op == O_TYPEOF) {
@@ -738,7 +780,7 @@ static jsval eval(js_rt *rt, node *n, jsobj *sc)
         if (t->type == N_IDENT) {
             prop *p = scope_find(sc, t->str, NULL);
             if (!p) { sbuf b; sb_init(&b); sb_add(&b, t->str->s, t->str->len); sb_adds(&b, " is not defined"); throw_error(rt, "ReferenceError", b.p, NULL, NULL); sb_free(&b); return U; }
-            jsval old = v_num(to_num(rt, p->val)); BAIL(U);
+            jsval old = v_num(to_num(rt, var_value(rt, p))); BAIL(U);
             jsval nv = update_value(rt, n, old);
             assign_var(rt, sc, t->str, nv); BAIL(U);
             return n->flag ? nv : old;
@@ -780,7 +822,7 @@ static jsval eval(js_rt *rt, node *n, jsobj *sc)
             else {
                 prop *p = scope_find(sc, t->str, NULL);
                 if (!p) { sbuf b; sb_init(&b); sb_add(&b, t->str->s, t->str->len); sb_adds(&b, " is not defined"); throw_error(rt, "ReferenceError", b.p, NULL, NULL); sb_free(&b); return U; }
-                jsval cur = p->val;
+                jsval cur = var_value(rt, p);
                 jsval r = eval(rt, n->b, sc); BAIL(U);
                 v = binary_op(rt, n->op, cur, r); BAIL(U);
             }
@@ -821,41 +863,27 @@ static jsval eval_args_call(js_rt *rt, node *n, jsobj *sc)
     } else {
         fn = eval(rt, callee, sc); BAIL(U);
     }
-    int cap = 8, argc = 0;
-    jsval stackargs[8], *args = stackargs, *heap = NULL;
+    int argc = 0;
+    jsval stackargs[8];
+    jsobj *spill = NULL;
     for (node *a = n->b; a; a = a->next) {
-        jsval vals[1]; int nv = 1;
-        jsobj *tmp = NULL;
         if (a->type == N_SPREAD) {
-            jsval s = eval(rt, a->a, sc);
-            if (NOVAL(rt)) { if (heap) JS_FREE(heap); return U; }
-            tmp = arr_new(rt, 0);
-            if (!spread_into(rt, tmp, s)) { if (heap) JS_FREE(heap); return U; }
-            nv = (int)tmp->alen;
+            jsval sv = eval(rt, a->a, sc); BAIL(U);
+            jsobj *tmp = arr_new(rt, 0);
+            if (!spread_into(rt, tmp, sv)) return U;
+            for (unsigned k = 0; k < tmp->alen; k++) if (!push_arg(rt, stackargs, &argc, &spill, tmp->items[k])) return U;
         } else {
-            vals[0] = eval(rt, a, sc);
-            if (NOVAL(rt)) { if (heap) JS_FREE(heap); return U; }
-        }
-        for (int k = 0; k < nv; k++) {
-            if (argc == cap) {
-                cap *= 2;
-                jsval *nh = (jsval *)JS_MALLOC((size_t)cap * sizeof(jsval));
-                if (!nh) { rt->abort_msg = "out of memory"; if (heap) JS_FREE(heap); return U; }
-                memcpy(nh, args, (size_t)argc * sizeof(jsval));
-                if (heap) JS_FREE(heap);
-                heap = nh; args = nh;
-            }
-            args[argc++] = tmp ? tmp->items[k] : vals[0];
+            jsval v = eval(rt, a, sc); BAIL(U);
+            if (!push_arg(rt, stackargs, &argc, &spill, v)) return U;
         }
     }
-    jsval r;
     if (!is_callable(fn)) {
         sbuf b; sb_init(&b); describe(callee, &b, 0); sb_adds(&b, " is not a function");
-        r = throw_error(rt, "TypeError", b.p, NULL, NULL);
+        jsval r = throw_error(rt, "TypeError", b.p, NULL, NULL);
         sb_free(&b);
-    } else r = call_fn(rt, fn, thisv, args, argc);
-    if (heap) JS_FREE(heap);
-    return r;
+        return r;
+    }
+    return call_fn(rt, fn, thisv, spill ? spill->items : stackargs, argc);
 }
 
 /* ---- statements -------------------------------------------------------------------------------------------- */
@@ -892,7 +920,7 @@ static int exec_stmt(js_rt *rt, node *n, jsobj *sc)
     if (step(rt)) return C_THROW;
     switch (n->type) {
     case N_EMPTY: return C_NORMAL;
-    case N_EXPR: eval(rt, n->a, sc); return NOVAL(rt) ? C_THROW : C_NORMAL;
+    case N_EXPR: rt->completion = eval(rt, n->a, sc); return NOVAL(rt) ? C_THROW : C_NORMAL;
     case N_VAR:
         for (node *d = n->a; d; d = d->next) {
             if (d->a) {
@@ -1068,7 +1096,7 @@ static void copy_err(char *err, int errmax, const char *a, const char *b)
     err[n] = 0;
 }
 
-int js_run(js_rt *rt, node *prog, char *err, int errmax)
+static int js_run_inner(js_rt *rt, node *prog, char *err, int errmax)
 {
     rt->steps = 0;
     rt->depth = 0;
@@ -1101,4 +1129,12 @@ int js_run(js_rt *rt, node *prog, char *err, int errmax)
         return 1;
     }
     return 0;
+}
+
+int js_run(js_rt *rt, node *prog, char *err, int errmax)
+{
+    RT_ENTER(rt);
+    int r = js_run_inner(rt, prog, err, errmax);
+    RT_LEAVE(rt);
+    return r;
 }

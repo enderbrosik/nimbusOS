@@ -17,6 +17,8 @@
 #include "gui/theme.h"
 #include "net/net.h"
 #include "net/netjob.h"
+#include "js/dom.h"
+#include "drivers/pit.h"
 #include "kernel/heap.h"
 #include "kernel/settings.h"
 #include "kernel/string.h"
@@ -45,8 +47,8 @@ struct run { int x, line, w, h; u32 off, len, color; u8 style, align, kind; i16 
 
 /* form controls */
 enum { FK_TEXT, FK_PASSWORD, FK_HIDDEN, FK_SUBMIT, FK_CHECK, FK_RADIO };
-struct field { char name[40], value[160], label[40]; textfield_t tf; u8 kind, checked, form, size; };   /* form 255: not in a form */
-struct form { char action[200]; u8 post; };
+struct field { char name[40], value[160], label[40]; textfield_t tf; u8 kind, checked, form, size, plain; int nid; };   /* plain: a button that does not send the form; nid: the script's id of the element */   /* form 255: not in a form */
+struct form { char action[200]; u8 post; int nid; };
 
 /* pictures (<img>), fetched one at a time after the page itself */
 #define MAXIMAGES 32
@@ -77,6 +79,8 @@ struct web {
     rect_t b_back, b_go, b_ua, content;
     bool ua_open;
     int hover_link;
+    struct dompage *dom;                    /* the scripts of this page, if it has any */
+    char nav_pending[256];                  /* a script asked to go to this address */
 };
 
 /* ---------------------------------------------------------------- document */
@@ -732,8 +736,11 @@ static void element_style(struct web *b, struct cstyle *c, const char *tag, cons
  * ones are kept for submitting.  Other types (file, image, ...) are ignored. */
 static void add_input(struct web *b, const struct cstyle *c, int form, const char *q, const char *e, const char *label)
 {
-    char type[16] = "text", name[40] = "", val[160] = "", size[8] = "", tmp[4];
-    get_attr(q, e, "type", type, sizeof type);
+    char type[16], name[40] = "", val[160] = "", size[8] = "", tmp[4], nidv[12] = "";
+    bool plain = false;
+    strlcpy(type, label ? "submit" : "text", sizeof type);                 /* a <button> is a submit button unless it says otherwise */
+    if (!get_attr(q, e, "type", type, sizeof type) || !type[0]) strlcpy(type, label ? "submit" : "text", sizeof type);
+    get_attr(q, e, "data-nid", nidv, sizeof nidv);
     get_attr(q, e, "name", name, sizeof name);
     get_attr(q, e, "value", val, sizeof val);
     get_attr(q, e, "size", size, sizeof size);
@@ -741,6 +748,7 @@ static void add_input(struct web *b, const struct cstyle *c, int form, const cha
     int kind;
     if (!strcasecmp(type, "hidden")) kind = FK_HIDDEN;
     else if (!strcasecmp(type, "submit") || !strcasecmp(type, "image")) kind = FK_SUBMIT;
+    else if (!strcasecmp(type, "button")) { kind = FK_SUBMIT; plain = true; }
     else if (!strcasecmp(type, "checkbox")) kind = FK_CHECK;
     else if (!strcasecmp(type, "radio")) kind = FK_RADIO;
     else if (!strcasecmp(type, "password")) kind = FK_PASSWORD;
@@ -751,6 +759,8 @@ static void add_input(struct web *b, const struct cstyle *c, int form, const cha
     struct field *f = &b->fields[b->nfields];
     memset(f, 0, sizeof *f);
     f->kind = (u8)kind;
+    f->plain = plain;
+    f->nid = atoi(nidv);
     f->form = form < 0 ? 255 : (u8)form;
     f->checked = checked;
     int sz = atoi(size);
@@ -950,17 +960,20 @@ static void parse_html(struct web *b, const char *h, bool plain)
                     get_attr(q, e, "method", method, sizeof method);
                     if (b->nforms < 8) {
                         struct form *f = &b->forms[b->nforms];
+                        char nv[12] = "";
+                        get_attr(q, e, "data-nid", nv, sizeof nv);
                         strlcpy(f->action, act, sizeof f->action);
                         f->post = !strcasecmp(method, "post");
+                        f->nid = atoi(nv);
                         cur_form = b->nforms++;
                     } else cur_form = -1;
                 } else if (!hidden && !strcmp(tag, "input")) {
                     add_input(b, cur, cur_form, q, e, NULL);
                 } else if (!hidden && !strcmp(tag, "button")) {
                     char type[16] = "submit";
-                    get_attr(q, e, "type", type, sizeof type);
+                    if (!get_attr(q, e, "type", type, sizeof type) || !type[0]) strlcpy(type, "submit", sizeof type);
                     const char *close_tag = find_ci(e + 1, "</button");
-                    if (!strcasecmp(type, "submit") && close_tag) {
+                    if ((!strcasecmp(type, "submit") || !strcasecmp(type, "button")) && close_tag) {
                         char label[40];
                         int o = 0;
                         bool in_tag = false;
@@ -1418,7 +1431,7 @@ static void paint(window_t *w)
     gfx_fill_rect(s, 0, sy, s->w, STATUS_H, RGB(240, 240, 240));
     gfx_hline(s, 0, sy, s->w, RGB(215, 215, 220));
     const char *st = b->status;
-    if (b->hover_link >= 0 && b->hover_link < b->nlinks) st = b->links[b->hover_link];
+    if (b->hover_link >= 0 && b->hover_link < b->nlinks) st = strncmp(b->links[b->hover_link], "nimbus-js:", 10) ? b->links[b->hover_link] : "(runs a script on this page)";
     gfx_ui_text_ellipsis(s, 8, sy + 3, st, s->w - 16, C_TEXT);
     if (b->ua_open) {                               /* the user-agent list drops down from the UA button */
         int n = http_ua_count(), x = b->b_ua.x + b->b_ua.w - 130, y = BAR_H - 2;
@@ -1570,6 +1583,7 @@ static void navigate_ex(window_t *w, const char *url, const char *post, bool pus
         strlcpy(b->history[b->nhist++], b->url, 256);
     }
     strlcpy(b->url, u, sizeof b->url);
+    if (b->dom) { dom_free(b->dom); b->dom = NULL; }
     tf_set(&b->addr, u);
     b->addr.sel = b->addr.cursor;
     if (!strcmp(u, "about:home") || !strcmp(u, "about:blank")) {
@@ -1660,6 +1674,158 @@ static void form_submit(window_t *w, int form, int submit_field)
     navigate_ex(w, url, NULL, true);
 }
 
+/* ---------------------------------------------------------------- scripts */
+static bool g_js_on = true;                       /* Ctrl+J turns scripting off and on */
+
+static void js_log(void *ud, const char *s, int len) { (void)ud; klog("[js  ] %.*s\n", len, s); }
+static void js_nav(void *ud, const char *url)
+{
+    struct web *b = ((window_t *)ud)->app;
+    strlcpy(b->nav_pending, url, sizeof b->nav_pending);
+}
+static long long js_now(void *ud) { (void)ud; return (long long)timer_ticks(); }
+
+static bool page_has_script(const char *html)
+{
+    return find_ci(html, "<script") || find_ci(html, " onclick") || find_ci(html, "javascript:");
+}
+
+/* Tells the page what the user has typed or ticked, before an event reaches a script. */
+static void js_sync(struct web *b)
+{
+    for (int i = 0; i < b->nfields; i++) {
+        struct field *f = &b->fields[i];
+        if (f->nid <= 0) continue;
+        if (f->kind == FK_TEXT || f->kind == FK_PASSWORD) dom_set_field(b->dom, f->nid, f->tf.text, 0);
+        else if (f->kind == FK_CHECK || f->kind == FK_RADIO) dom_set_field(b->dom, f->nid, NULL, f->checked);
+    }
+}
+
+/* Draws the page again from the script's tree, keeping the scroll position, the focused field with its cursor,
+ * and the pictures that are still on the page. */
+static void js_rerender(window_t *w)
+{
+    struct web *b = w->app;
+    int len = 0;
+    char *html = dom_serialize(b->dom, &len);
+    if (!html) return;
+    int scroll = b->scroll;
+    int focus_nid = (b->focus >= 0 && b->focus < b->nfields) ? b->fields[b->focus].nid : 0;
+    textfield_t saved_tf;
+    memset(&saved_tf, 0, sizeof saved_tf);
+    if (focus_nid) saved_tf = b->fields[b->focus].tf;
+    struct image *old = kmalloc(sizeof *old * MAXIMAGES);
+    int nold = b->nimages;
+    if (old) memcpy(old, b->images, sizeof *old * (size_t)nold);
+    else nold = 0;
+    b->nimages = nold ? 0 : b->nimages;                 /* the pictures are kept: doc_clear must not free them */
+    doc_clear(b);
+    parse_html(b, html, false);
+    dom_str_free(html);
+    for (int i = 0; i < b->nimages; i++)
+        for (int j = 0; j < nold; j++)
+            if (old[j].surf && !strcmp(old[j].src, b->images[i].src)) {
+                b->images[i].surf = old[j].surf;
+                b->images[i].state = 2;
+                old[j].surf = NULL;
+                break;
+            }
+    for (int j = 0; j < nold; j++) if (old[j].surf) surface_destroy(old[j].surf);
+    kfree(old);
+    if (focus_nid)
+        for (int i = 0; i < b->nfields; i++)
+            if (b->fields[i].nid == focus_nid) {
+                b->focus = i;
+                if (!strcmp(saved_tf.text, b->fields[i].tf.text)) b->fields[i].tf = saved_tf;
+                break;
+            }
+    b->laid_w = 0;
+    b->scroll = scroll;
+    paint(w);
+    int mx = MAX(0, b->nlines - vis_lines(b));
+    if (b->scroll > mx) { b->scroll = mx; paint(w); }
+    if (b->nimages) wm_set_timer(w, 50);                /* pictures still to load */
+}
+
+/* What to do after a script ran: go where it asked, draw changes, keep the clock ticking for its timers.
+ * Returns true if the page is being left. */
+static bool js_after(window_t *w, int r)
+{
+    struct web *b = w->app;
+    if (b->nav_pending[0]) {
+        char u[256];
+        resolve_link(b, b->nav_pending, u, sizeof u);
+        b->nav_pending[0] = 0;
+        klog("[js  ] navigate to %s\n", u);
+        navigate(w, u, true);
+        return true;
+    }
+    if ((r & DOM_CHANGED) && b->dom) js_rerender(w);
+    if (b->dom && dom_has_timers(b->dom)) wm_set_timer(w, 50);
+    return false;
+}
+
+static void js_start(window_t *w, const char *body)
+{
+    struct web *b = w->app;
+    if (b->dom) { dom_free(b->dom); b->dom = NULL; }
+    if (!g_js_on || strlen(body) > 400000 || !page_has_script(body)) return;
+    struct dom_host host = { js_log, js_nav, js_now, w };
+    b->dom = dom_new(body, b->url, &host);
+    if (!b->dom) return;
+    klog("[js  ] running the scripts of %s\n", b->url);
+    int r = dom_run_scripts(b->dom);
+    js_after(w, r);
+}
+
+static void js_tick(window_t *w)
+{
+    struct web *b = w->app;
+    if (!b->dom) return;
+    js_after(w, dom_poll(b->dom));
+}
+
+static void js_click(window_t *w, int nid)
+{
+    struct web *b = w->app;
+    if (!b->dom) return;
+    js_sync(b);
+    char nav[256] = "";
+    int r = dom_click(b->dom, nid, nav, sizeof nav);
+    if (r & DOM_NAVIGATE) strlcpy(b->nav_pending, nav, sizeof b->nav_pending);
+    js_after(w, r);
+}
+
+/* A click on a form control that has a script id. Returns true if the default action (sending the form) should go on. */
+static bool js_control_click(window_t *w, int nid)
+{
+    struct web *b = w->app;
+    if (!b->dom || nid <= 0) return true;
+    js_sync(b);
+    int r = dom_click(b->dom, nid, NULL, 0);
+    if (js_after(w, r)) return false;
+    return !(r & DOM_PREVENTED);
+}
+
+/* The form is about to be sent: let the page's submit handlers have a say. Returns true to go ahead. */
+static bool js_form_ok(window_t *w, int form)
+{
+    struct web *b = w->app;
+    if (!b->dom || form < 0 || form >= b->nforms || b->forms[form].nid <= 0) return true;
+    js_sync(b);
+    int r = dom_submit(b->dom, b->forms[form].nid);
+    if (js_after(w, r)) return false;
+    return !(r & DOM_PREVENTED);
+}
+
+static void js_typed(window_t *w, int nid)
+{
+    struct web *b = w->app;
+    if (!b->dom || nid <= 0) return;
+    js_sync(b);
+    js_after(w, dom_input(b->dom, nid));
+}
+
 static int c_x(struct web *b, const struct run *r) { return b->content.x + MARGIN + r->x; }
 static int c_y(struct web *b, const struct run *r) { return b->content.y + MARGIN + (r->line - b->scroll) * LINE_H - 2; }
 
@@ -1722,6 +1888,7 @@ static void poll_page(window_t *w)
         b->addr.sel = b->addr.cursor;
         bool html = strstr(body, "<html") || strstr(body, "<HTML") || strstr(body, "<p") || strstr(body, "<body") || strstr(body, "<h1");
         show_html(w, body, !html);
+        if (html) js_start(w, body);
         if (!strncmp(b->url, "https://", 8))
             snprintf(b->status, sizeof b->status, "Done - encrypted, certificate not verified - HTTP %d, %u bytes, %d links (%s)",
                      status, len, b->nlinks, http_last_security());
@@ -1779,7 +1946,8 @@ static void poll_job(window_t *w)
     struct web *b = w->app;
     poll_page(w);
     poll_images(w);
-    bool more = b->job || b->img_job;
+    js_tick(w);
+    bool more = b->job || b->img_job || (b->dom && dom_has_timers(b->dom));
     for (int i = 0; i < b->nimages; i++) more |= b->images[i].state <= 1;
     if (!more) wm_set_timer(w, 0);
 }
@@ -1837,19 +2005,27 @@ static void on_event(window_t *w, event_t *e)
                     tf_click(&f->tf, rect_make(c_x(b, r), c_y(b, r), r->w, 21), e->x);
                 } else {
                     b->focus = -1;
-                    if (f->kind == FK_SUBMIT) { form_submit(w, f->form == 255 ? -1 : f->form, r->field); break; }
+                    int fidx = r->field, nid = f->nid, form = f->form == 255 ? -1 : f->form;
+                    bool plain = f->plain;
+                    if (f->kind == FK_SUBMIT) {
+                        if (!js_control_click(w, nid) || plain) break;
+                        if (js_form_ok(w, form)) form_submit(w, form, fidx);
+                        break;
+                    }
                     if (f->kind == FK_CHECK) f->checked = !f->checked;
                     else if (f->kind == FK_RADIO) {
                         for (int i = 0; i < b->nfields; i++)
                             if (b->fields[i].kind == FK_RADIO && b->fields[i].form == f->form && !strcmp(b->fields[i].name, f->name)) b->fields[i].checked = 0;
                         f->checked = 1;
                     }
+                    if (nid > 0 && b->dom) { js_control_click(w, nid); js_typed(w, nid); break; }
                 }
                 paint(w);
                 break;
             }
             b->focus = -1;
             int l = link_at(b, e->x, e->y);
+            if (l >= 0 && !strncmp(b->links[l], "nimbus-js:", 10)) { js_click(w, atoi(b->links[l] + 10)); break; }
             if (l >= 0) {
                 char u[256];
                 resolve_link(b, b->links[l], u, sizeof u);
@@ -1865,9 +2041,13 @@ static void on_event(window_t *w, event_t *e)
         if (!k->pressed) break;
         if (!b->addr_focus && b->focus >= 0 && b->focus < b->nfields) {      /* typing into a form field */
             struct field *f = &b->fields[b->focus];
-            if (k->key == KEY_ENTER) { form_submit(w, f->form == 255 ? -1 : f->form, -1); break; }
+            if (k->key == KEY_ENTER) { int form = f->form == 255 ? -1 : f->form; if (js_form_ok(w, form)) form_submit(w, form, -1); break; }
             if (k->key == KEY_ESC) { b->focus = -1; paint(w); break; }
-            if (tf_key(&f->tf, k)) paint(w);
+            if (tf_key(&f->tf, k)) {
+                int nid = f->nid;
+                paint(w);
+                if (nid > 0 && b->dom) js_typed(w, nid);
+            }
             break;
         }
         if (b->addr_focus) {
@@ -1887,12 +2067,18 @@ static void on_event(window_t *w, event_t *e)
             snprintf(b->status, sizeof b->status, "Identifying as %s (Ctrl+U switches; reload to apply)", http_ua_next());
             paint(w);
         }
+        else if ((k->mods & MOD_CTRL) && k->key == 'j') {
+            g_js_on = !g_js_on;
+            snprintf(b->status, sizeof b->status, "Scripts are %s (reload to apply)", g_js_on ? "on" : "off");
+            paint(w);
+        }
         else if ((k->mods & MOD_CTRL) && k->key == 'l') { b->addr_focus = true; b->addr.sel = 0; b->addr.cursor = b->addr.len; paint(w); }
         break;
     }
     case EV_CLOSE: wm_destroy_window(w); break;
     case EV_DESTROY:
         if (b->job) { netjob_cancel(b->job); netjob_release(b->job); }
+        if (b->dom) { dom_free(b->dom); b->dom = NULL; }
         doc_clear(b);
         kfree(b->text); kfree(b->items); kfree(b->runs); kfree(b->rules); kfree(b->css); kfree(b->fields); kfree(b);
         break;
