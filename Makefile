@@ -421,7 +421,7 @@ $(PI_FW)/.stamp:
 $(PI_IMG): $(PI_KIMG) $(PI_FW)/.stamp
 	rm -f $@ && truncate -s 128M $@
 	python3 tools/mkmbr.py $@ 0c
-	mformat -i $@@@1M -F -v NIMBUSOS ::
+	mformat -i $@@@1M -F -H 2048 -v NIMBUSOS ::
 	mcopy -i $@@@1M $(addprefix $(PI_FW)/,$(PI_FW_FILES)) $(PI)/sdcard/nimbus8.img $(PI)/sdcard/config.txt \
 	  $(PI)/sdcard/NIMBUS.LOG $(PI)/sdcard/README-NIMBUS.txt ::
 	@echo "SD card image: $@ (write it with Raspberry Pi Imager, Use custom)"

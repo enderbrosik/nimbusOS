@@ -1,10 +1,22 @@
 /* NimbusOS - Raspberry Pi entry point (AArch64).
  * The firmware starts every core here (at EL2, or EL3 under some loaders).
- * Core 0 drops to EL1, sets up a stack, clears .bss and calls pi_main;
- * the others sleep forever. */
+ * Core 0 drops to EL1, moves the kernel to the address it was linked for if
+ * the firmware put it elsewhere, sets up a stack, clears .bss and calls
+ * pi_main; the others sleep forever.
+ * The image starts with the arm64 Linux "Image" header, which the Pi
+ * firmware reads to place 64-bit kernels (Documentation/arch/arm64/booting.rst). */
 .section .text.boot
 .global _start
 _start:
+    b       entry                       /* code0 */
+    .long   0                           /* code1 */
+    .quad   0x80000                     /* text_offset */
+    .quad   __image_size                /* image_size, including .bss */
+    .quad   0x2                         /* flags: little endian, 4 KiB pages */
+    .quad   0, 0, 0
+    .ascii  "ARM\x64"                    /* magic */
+    .long   0
+entry:
     mrs     x1, mpidr_el1
     and     x1, x1, #3
     cbz     x1, 2f
@@ -43,7 +55,48 @@ _start:
     adr     x1, 4f
     msr     elr_el2, x1
     eret
-4:  ldr     x1, =__stack_top
+4:  /* Running somewhere other than 0x80000?  Copy the image there (caches
+     * are off, so no maintenance beyond the instruction cache) and jump. */
+    adr     x2, _start
+    ldr     x3, =_start
+    cmp     x2, x3
+    b.eq    8f
+    ldr     x4, =__image_end
+    sub     x4, x4, x3                  /* bytes to copy (multiple of 4 KiB) */
+    b.hi    7f
+    /* destination above source: copy backwards */
+    add     x5, x2, x4
+    add     x6, x3, x4
+9:  ldr     x7, [x5, #-8]!
+    str     x7, [x6, #-8]!
+    cmp     x5, x2
+    b.hi    9b
+    b       10f
+7:  mov     x5, x2                      /* destination below source: forwards.  The copy */
+    mov     x6, x3                      /* would overwrite this loop, so the first page */
+    add     x8, x2, #4096               /* (all of the boot code) goes first, and the */
+12: ldr     x7, [x5], #8                /* rest is copied by the new copy of the code. */
+    str     x7, [x6], #8
+    cmp     x5, x8
+    b.lo    12b
+    dsb     sy
+    ic      iallu
+    dsb     sy
+    isb
+    ldr     x1, =13f
+    br      x1
+13: add     x8, x2, x4
+11: ldr     x7, [x5], #8
+    str     x7, [x6], #8
+    cmp     x5, x8
+    b.lo    11b
+10: dsb     sy
+    ic      iallu
+    dsb     sy
+    isb
+    ldr     x1, =8f
+    br      x1
+8:  ldr     x1, =__stack_top
     mov     sp, x1
     mov     x1, #(3 << 20)
     msr     cpacr_el1, x1

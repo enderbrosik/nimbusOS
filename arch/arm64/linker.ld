@@ -13,6 +13,7 @@ SECTIONS
     . = ALIGN(4096);
     .disk : { __disk_start = .; KEEP(*(.disk)) __disk_end = .; }
     . = ALIGN(4096);
+    __image_end = .;
     .bss (NOLOAD) : {
         __bss_start = .;
         *(.bss .bss.*) *(COMMON)
@@ -23,5 +24,6 @@ SECTIONS
         __bss_end = .;
     }
     __kernel_end = .;
+    __image_size = __kernel_end - __kernel_start;
     /DISCARD/ : { *(.comment) *(.note*) *(.eh_frame*) }
 }

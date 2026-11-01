@@ -91,9 +91,10 @@ void pi_main(u64 dtb)
     uart_init();
     timer_early();
     query_board();
-    mmu_init();
-    bool screen = fb_early();
+    bool screen = fb_early();                       /* first, so even an early crash is visible */
     vga_init();
+    if (screen) kprintf("NimbusOS: kernel started, screen ready, turning on the MMU\n");
+    mmu_init();
     vga_setcolor(VGA_LCYAN, VGA_BLACK);
     kprintf("NimbusOS " NIMBUS_VERSION " - booting on %s\n", pi_board_name());
     vga_setcolor(VGA_LGREY, VGA_BLACK);
