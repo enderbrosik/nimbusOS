@@ -88,6 +88,8 @@ static void query_board(void)
 void pi_main(u64 dtb)
 {
     pi_detect();
+    pi_led_blink(5);                                /* "the kernel is running", even with no screen */
+    pi_led(true);
     uart_init();
     timer_early();
     query_board();
@@ -95,6 +97,8 @@ void pi_main(u64 dtb)
     vga_init();
     if (screen) kprintf("NimbusOS: kernel started, screen ready, turning on the MMU\n");
     mmu_init();
+    kprintf("[boot] MMU on\n");
+    sdlog_init();                                   /* early, so a later hang still leaves a log */
     vga_setcolor(VGA_LCYAN, VGA_BLACK);
     kprintf("NimbusOS " NIMBUS_VERSION " - booting on %s\n", pi_board_name());
     vga_setcolor(VGA_LGREY, VGA_BLACK);
@@ -120,7 +124,6 @@ void pi_main(u64 dtb)
     timer_busy_wait(20);
     if (irq_count()) kprintf("[cpu ] timer interrupts working (%llu in 20 ms)\n", irq_count());
     else kprintf("[cpu ] WARNING: no timer interrupts - tasks will only switch when they wait\n");
-    sdlog_init();
     if (irq_count()) selftest_core();               /* its scheduler test needs preemption */
     vga_setcolor(VGA_LGREEN, VGA_BLACK);
     kprintf("Core kernel OK.\n");

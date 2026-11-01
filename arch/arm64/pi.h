@@ -17,6 +17,8 @@ static inline void dsb(void) { __asm__ volatile("dsb sy" ::: "memory"); }
 #define SET_SYSREG(name, v) __asm__ volatile("msr " #name ", %0" :: "r"((u64)(v)) : "memory")
 
 void pi_detect(void);
+void pi_led(bool on);
+void pi_led_blink(int times);
 const char *pi_board_name(void);
 
 /* Mailbox property interface (channel 8).  buf is a complete message,
