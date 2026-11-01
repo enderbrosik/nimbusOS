@@ -397,7 +397,7 @@ $(PI_DISK): $(IMG)
 
 $(PI_KELF): $(PI_OBJS) arch/arm64/linker.ld
 	ld.lld -m aarch64elf -T arch/arm64/linker.ld -nostdlib -o $@ $(PI_OBJS)
-$(PI_KIMG): $(PI_KELF) arch/arm64/config.txt
+$(PI_KIMG): $(PI_KELF) arch/arm64/config.txt arch/arm64/README-pi.txt
 	@mkdir -p $(dir $@)
 	llvm-objcopy -O binary $< $@
 	cp arch/arm64/config.txt $(PI)/sdcard/config.txt
