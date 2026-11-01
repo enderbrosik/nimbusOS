@@ -17,6 +17,18 @@ static u8 pool[32];
 static u64 counter;
 static int have_rdrand = -1;
 
+#ifdef __aarch64__
+/* Raspberry Pi: the generic timer counter stands in for the TSC; there is no
+ * RDRAND (the Pi's hardware RNG is not used yet). */
+static u64 rdtsc(void)
+{
+    u64 c;
+    __asm__ volatile("mrs %0, cntpct_el0" : "=r"(c));
+    return c;
+}
+
+static bool rdrand64(u64 *v) { (void)v; (void)have_rdrand; return false; }
+#else
 static u64 rdtsc(void)
 {
     u32 lo, hi;
@@ -39,6 +51,7 @@ static bool rdrand64(u64 *v)
     }
     return false;
 }
+#endif
 
 /* Mix a value into the pool (called from the network task per packet). */
 void rng_stir(u64 v)

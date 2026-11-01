@@ -1,6 +1,23 @@
 /* NimbusOS - freestanding string / memory routines. */
 #include "kernel/string.h"
 
+#ifdef __aarch64__
+/* AArch64: plain C, 8 bytes at a time when both pointers allow it. */
+void *memcpy(void *dst, const void *src, size_t n)
+{
+    u8 *d = dst;
+    const u8 *s = src;
+    if ((((uptr)d | (uptr)s) & 7) == 0) {
+        for (; n >= 32; n -= 32, d += 32, s += 32) {
+            ((u64 *)d)[0] = ((const u64 *)s)[0]; ((u64 *)d)[1] = ((const u64 *)s)[1];
+            ((u64 *)d)[2] = ((const u64 *)s)[2]; ((u64 *)d)[3] = ((const u64 *)s)[3];
+        }
+        for (; n >= 8; n -= 8, d += 8, s += 8) *(u64 *)d = *(const u64 *)s;
+    }
+    while (n--) *d++ = *s++;
+    return dst;
+}
+#else
 void *memcpy(void *dst, const void *src, size_t n)
 {
     void *ret = dst;
@@ -14,6 +31,7 @@ void *memcpy(void *dst, const void *src, size_t n)
                      : "memory");
     return ret;
 }
+#endif
 
 void *memmove(void *dst, const void *src, size_t n)
 {
@@ -27,6 +45,22 @@ void *memmove(void *dst, const void *src, size_t n)
     return dst;
 }
 
+#ifdef __aarch64__
+void *memset(void *dst, int c, size_t n)
+{
+    u8 *d = dst;
+    while (n && ((uptr)d & 7)) { *d++ = (u8)c; n--; }
+    u64 v = (u8)c * 0x0101010101010101ull;
+    for (; n >= 8; n -= 8, d += 8) *(u64 *)d = v;
+    while (n--) *d++ = (u8)c;
+    return dst;
+}
+
+void memset32(u32 *dst, u32 v, size_t count)
+{
+    while (count--) *dst++ = v;
+}
+#else
 void *memset(void *dst, int c, size_t n)
 {
     void *ret = dst;
@@ -40,6 +74,7 @@ void memset32(u32 *dst, u32 v, size_t count)
     u64 d0, d1;
     __asm__ volatile("rep stosl" : "=&c"(d0), "=&D"(d1) : "0"(count), "1"(dst), "a"(v) : "memory");
 }
+#endif
 
 int memcmp(const void *a, const void *b, size_t n)
 {

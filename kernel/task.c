@@ -136,6 +136,15 @@ struct task *task_create_ex(const char *name, void (*entry)(void *), void *arg, 
     t->arg = arg;
     t->state = TASK_READY;
 
+#ifdef __aarch64__
+    /* The frame is restored by vectors.S; eret jumps to the trampoline in
+     * EL1 with interrupts enabled, and sp ends up at the top of the stack. */
+    uptr top = ((uptr)t->stack + stack_size) & ~(uptr)15;
+    struct regs *r = (struct regs *)(top - sizeof(struct regs));
+    memset(r, 0, sizeof *r);
+    r->elr = (uptr)task_trampoline;
+    r->spsr = 0x5;              /* EL1h, DAIF clear */
+#else
     /* The initial frame is popped by isr_common's epilogue; iretq then
      * loads RSP from it.  RSP is chosen so that the trampoline starts with
      * the stack alignment of a normal function entry (RSP % 16 == 8). */
@@ -147,6 +156,7 @@ struct task *task_create_ex(const char *name, void (*entry)(void *), void *arg, 
     r->rflags = 0x202;          /* IF set */
     r->rsp = top - 8;
     r->ss = KERNEL_DS;
+#endif
     t->sp = (uptr)r;
     t->kstack_top = top;
 
@@ -159,7 +169,11 @@ struct task *task_create_ex(const char *name, void (*entry)(void *), void *arg, 
     return t;
 }
 
+#ifdef __aarch64__
+void task_yield(void) { __asm__ volatile("svc #0" ::: "memory"); }
+#else
 void task_yield(void) { __asm__ volatile("int $0x30"); }
+#endif
 
 void task_sleep(u32 ms)
 {

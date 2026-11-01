@@ -9,7 +9,13 @@ static bool seeded;
 static void seed(void)
 {
     u32 lo, hi;
+#ifdef __aarch64__
+    u64 c;
+    __asm__ volatile("mrs %0, cntpct_el0" : "=r"(c));
+    lo = (u32)c; hi = (u32)(c >> 32);
+#else
     __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+#endif
     st[0] = lo ^ 0x9E3779B9;
     st[1] = hi ^ rtc_unix_time();
     st[2] = lo * 2654435761u + 1;

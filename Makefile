@@ -344,3 +344,79 @@ clean:
 	rm -rf $(BUILD)
 
 -include $(DEPS)
+
+# ---- Raspberry Pi 4 / 400 (AArch64) ---------------------------------------
+# `make pi` builds build/pi/sdcard/: kernel8 image, config.txt and an empty
+# NIMBUS.LOG to copy onto the FAT32 boot partition of an SD card that already
+# holds the Raspberry Pi firmware (start4.elf, fixup4.dat).  The NimbusFS
+# disk is linked into the kernel and mounted as a RAM disk.  `make run-pi`
+# boots it in QEMU's raspi3b machine (same code, BCM2837 addresses).
+PI        := $(BUILD)/pi
+PI_KELF   := $(PI)/kernel8.elf
+PI_KIMG   := $(PI)/sdcard/nimbus8.img
+PI_DISK   := $(PI)/disk.img
+PI_DISK_MB ?= 32
+BUILD_EPOCH ?= $(shell date +%s)
+PI_CFLAGS := --target=aarch64-elf -std=gnu11 -ffreestanding -fno-builtin -nostdlib -nostdinc \
+             -fno-stack-protector -fno-pic -fno-omit-frame-pointer -fno-strict-aliasing \
+             -mgeneral-regs-only -mcmodel=small -O2 -g -Wall -Wextra -Wno-unused-parameter \
+             -Iarch/arm64/shim -I. -I$(GEN) -DNIMBUS_KERNEL -DNIMBUS_PI -DBUILD_EPOCH=$(BUILD_EPOCH)ull $(EXTRA_CFLAGS)
+PI_EXCL   := kernel/main.c kernel/vmm.c kernel/panic.c kernel/power.c kernel/proc.c kernel/syscall.c
+PI_SRCS   := $(filter-out $(PI_EXCL),$(foreach d,kernel fs gui apps installer net js,$(wildcard $(d)/*.c))) \
+             $(wildcard arch/arm64/*.c)
+PI_OBJS   := $(patsubst %.c,$(PI)/%.o,$(PI_SRCS)) $(PI)/gen/ui_font.o $(PI)/gen/pi_font.o \
+             $(PI)/arch/arm64/vectors.o $(PI)/arch/arm64/boot.o
+
+$(BUILD)/tools/mkvgafont: tools/mkvgafont.c third_party/stb/stb_truetype.h
+	@mkdir -p $(dir $@)
+	$(HOSTCC) -O2 -I. -o $@ $< -lm
+$(GEN)/pi_font.c: $(BUILD)/tools/mkvgafont fonts/DejaVuSansMono.ttf
+	@mkdir -p $(GEN)
+	$(BUILD)/tools/mkvgafont $@ fonts/DejaVuSansMono.ttf
+$(PI)/gen/%.o: $(GEN)/%.c
+	@mkdir -p $(dir $@)
+	$(KCC) $(PI_CFLAGS) -c $< -o $@
+$(PI)/%.o: %.c | $(GEN)/nimbus_version.h $(GEN)/update_pubkey.h
+	@mkdir -p $(dir $@)
+	$(KCC) $(PI_CFLAGS) -MMD -MP -c $< -o $@
+$(PI)/arch/arm64/vectors.o: arch/arm64/vectors.S
+	@mkdir -p $(dir $@)
+	$(KCC) --target=aarch64-elf -c $< -o $@
+$(PI)/arch/arm64/boot.o: arch/arm64/boot.S $(PI_DISK)
+	@mkdir -p $(dir $@)
+	$(KCC) --target=aarch64-elf -DDISK_IMAGE='"$(PI_DISK)"' -c $< -o $@
+
+# The Pi's disk: the same NimbusFS volume as the PC image, smaller.
+$(PI_DISK): $(IMG)
+	@mkdir -p $(dir $@)
+	$(MKIMAGE) $@ $(PI_DISK_MB) $(MBR) $(STAGE2) $(KBIN)
+	$(NFSTOOL) format $@ NIMBUS
+	$(NFSTOOL) import $@ rootfs /
+	$(NFSTOOL) import $@ $(GENROOT) /
+	$(NFSTOOL) import $@ $(USERROOT) /
+
+$(PI_KELF): $(PI_OBJS) arch/arm64/linker.ld
+	ld.lld -m aarch64elf -T arch/arm64/linker.ld -nostdlib -o $@ $(PI_OBJS)
+$(PI_KIMG): $(PI_KELF) arch/arm64/config.txt
+	@mkdir -p $(dir $@)
+	llvm-objcopy -O binary $< $@
+	cp arch/arm64/config.txt $(PI)/sdcard/config.txt
+	cp arch/arm64/README-pi.txt $(PI)/sdcard/README-NIMBUS.txt
+	test -f $(PI)/sdcard/NIMBUS.LOG || (printf 'NimbusOS boot log (written by NimbusOS)\r\n' > $(PI)/sdcard/NIMBUS.LOG && \
+	  truncate -s 512K $(PI)/sdcard/NIMBUS.LOG)
+	@echo "Raspberry Pi files are in $(PI)/sdcard/"
+
+.PHONY: pi run-pi test-pi
+pi: $(PI_KIMG)
+test-pi:
+	python3 tools/test_pi.py
+# QEMU's raspi3b: the SD card image only carries the FAT partition with NIMBUS.LOG.
+PI_SD := $(PI)/qemu-sd.img
+$(PI_SD): $(PI_KIMG)
+	rm -f $@ && truncate -s 64M $@
+	python3 tools/mkmbr.py $@ 0c
+	mformat -i $@@@1M -F -v NIMBUSBOOT ::
+	mcopy -i $@@@1M $(PI)/sdcard/NIMBUS.LOG $(PI)/sdcard/config.txt ::
+run-pi: $(PI_KIMG) $(PI_SD)
+	qemu-system-aarch64 -M raspi3b -kernel $(PI_KELF) -serial stdio -drive file=$(PI_SD),if=sd,format=raw $(QEMU_EXTRA)
+-include $(PI_OBJS:.o=.d)

@@ -623,3 +623,14 @@ downloads, chunked responses, an http→https redirect and the browser.
 * ACPI Specification 6.4: RSDP, FADT, `\_Sx` objects, PM1 control register.
 * T13 ATA/ATAPI-6: IDENTIFY DEVICE, READ/WRITE SECTORS, FLUSH CACHE.
 * Microsoft BMP file format (BITMAPINFOHEADER).
+
+## Raspberry Pi 4 / Pi 400 (stage 1, `rpi400` branch)
+
+`make pi` builds an AArch64 kernel (`arch/arm64/`) that boots on a Pi 4 or
+Pi 400 straight to the desktop on HDMI.  The files to copy to an SD card's
+boot partition end up in `build/pi/sdcard/` (see `README-NIMBUS.txt` there).
+The shared kernel, GUI and apps are built unchanged; `arch/arm64/shim/`
+stands in for the x86 headers.  Every log line is drawn on screen during boot
+and written to `NIMBUS.LOG` on the card.  Not yet: USB keyboard and mouse
+(next stage), SD storage for files, network, sound.  `make run-pi` and
+`make test-pi` run it in QEMU's raspi3b machine.

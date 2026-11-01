@@ -1,0 +1,12 @@
+# NimbusOS for the Raspberry Pi 4 / Pi 400.
+# Copy this file, nimbus8.img and NIMBUS.LOG to the SD card's boot partition
+# (keep the Raspberry Pi firmware files that are already there).
+[pi4]
+arm_64bit=1
+kernel=nimbus8.img
+kernel_address=0x80000
+disable_overscan=1
+hdmi_force_hotplug=1
+enable_uart=1
+dtoverlay=disable-bt
+[all]
