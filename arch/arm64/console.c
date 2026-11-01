@@ -13,7 +13,7 @@ static const u32 palette[16] = {
     0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
 };
 static int col, row, cols, rows;
-static u32 fg = 0xC0C0C0, bg = 0x000000;
+static u32 fg = 0xFFC0C0C0, bg = 0xFF000000;
 static bool active;
 
 static void clear_row(int r)
@@ -44,7 +44,7 @@ void vga_clear(void)
     col = row = 0;
 }
 
-void vga_setcolor(u8 f, u8 b) { fg = palette[f & 15]; bg = palette[b & 15]; }
+void vga_setcolor(u8 f, u8 b) { fg = palette[f & 15] | 0xFF000000; bg = palette[b & 15] | 0xFF000000; }   /* opaque */
 void vga_disable(void) { active = false; }
 void console_disable(void) { active = false; }
 

@@ -48,6 +48,8 @@ static bool set_mode(int w, int h)
     mb[i++] = 0x00048009; mb[i++] = 8; mb[i++] = 0; mb[i++] = 0; mb[i++] = 0;             /* offset */
     mb[i++] = 0x00048005; mb[i++] = 4; mb[i++] = 0; mb[i++] = 32;                         /* depth */
     mb[i++] = 0x00048006; mb[i++] = 4; mb[i++] = 0; mb[i++] = 0;                          /* pixel order: BGR */
+    int alpha = i;
+    mb[i++] = 0x00048007; mb[i++] = 4; mb[i++] = 0; mb[i++] = 2;                          /* alpha: ignored */
     int alloc = i;
     mb[i++] = 0x00040001; mb[i++] = 8; mb[i++] = 0; mb[i++] = 4096; mb[i++] = 0;          /* allocate */
     int pitch = i;
@@ -64,6 +66,9 @@ static bool set_mode(int w, int h)
     g_fb.pitch = (int)(mb[pitch + 3] / 4);
     fb_bytes = mb[alloc + 4];
     if (mb[24] != 0) klog("[fb  ] firmware chose RGB pixel order; colours will be swapped\n");
+    /* The Pi 4 firmware otherwise treats the top byte as alpha, and 0 is
+     * fully transparent: the picture would be invisible. */
+    klog("[fb  ] alpha mode %u (2 = ignored)\n", mb[alpha + 3]);
     return gw > 0 && gh > 0;
 }
 
@@ -72,7 +77,9 @@ static bool set_mode(int w, int h)
 bool fb_early(void)
 {
     int w = 1024, h = 768, dw, dh;
-    if (display_size(&dw, &dh) && dw >= 800 && dh >= 600) { w = dw; h = dh; }
+    bool known = display_size(&dw, &dh);
+    klog("[fb  ] firmware reports the display as %s %dx%d\n", known ? "" : "(failed)", known ? dw : 0, known ? dh : 0);
+    if (known && dw >= 800 && dh >= 600) { w = dw; h = dh; }
     if (w > 1920) { w = 1920; h = 1080; }
     if (!set_mode(w, h) && !set_mode(1024, 768)) return false;
     return true;
