@@ -2,6 +2,7 @@
 # Copy this file, nimbus8.img and NIMBUS.LOG to the SD card's boot partition
 # (keep the Raspberry Pi firmware files that are already there).
 [pi4]
+os_check=0
 arm_64bit=1
 kernel=nimbus8.img
 kernel_address=0x80000

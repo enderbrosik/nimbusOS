@@ -5,7 +5,13 @@ What works: the Pi boots NimbusOS and shows the desktop on HDMI.
 Not yet: keyboard and mouse (USB is the next stage), SD card storage for
 your files (changes are kept in RAM only), network, sound.
 
-Install
+Install with Raspberry Pi Imager (easiest)
+1. Choose Device: Raspberry Pi 400.  Choose OS: "Use custom", pick
+   nimbus-pi400.img (or the .zip).  Choose your SD card.
+2. When Imager asks about OS customisation, choose "No".
+3. Put the card in the Pi 400 and switch it on.
+
+Install by copying files (keeps Raspberry Pi OS on the card)
 1. Use an SD card that already boots Raspberry Pi OS (Raspberry Pi Imager,
    any version).  Its boot partition ("bootfs") has the firmware NimbusOS
    needs (start4.elf, fixup4.dat).

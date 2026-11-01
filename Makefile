@@ -406,7 +406,26 @@ $(PI_KIMG): $(PI_KELF) arch/arm64/config.txt
 	  truncate -s 512K $(PI)/sdcard/NIMBUS.LOG)
 	@echo "Raspberry Pi files are in $(PI)/sdcard/"
 
-.PHONY: pi run-pi test-pi
+.PHONY: pi run-pi test-pi pi-img
+# A complete SD card image for Raspberry Pi Imager ("Use custom"): MBR, one
+# FAT32 partition with the Raspberry Pi firmware (downloaded once into
+# build/pi/firmware, Broadcom licence in LICENCE.broadcom) and the NimbusOS files.
+PI_FW_URL := https://raw.githubusercontent.com/raspberrypi/firmware/master/boot
+PI_FW     := $(PI)/firmware
+PI_FW_FILES := start4.elf fixup4.dat bcm2711-rpi-400.dtb bcm2711-rpi-4-b.dtb LICENCE.broadcom
+PI_IMG    := $(BUILD)/nimbus-pi400.img
+$(PI_FW)/.stamp:
+	@mkdir -p $(PI_FW)
+	for f in $(PI_FW_FILES); do curl -sSfL -o $(PI_FW)/$$f $(PI_FW_URL)/$$f || exit 1; done
+	@touch $@
+$(PI_IMG): $(PI_KIMG) $(PI_FW)/.stamp
+	rm -f $@ && truncate -s 128M $@
+	python3 tools/mkmbr.py $@ 0c
+	mformat -i $@@@1M -F -v NIMBUSOS ::
+	mcopy -i $@@@1M $(addprefix $(PI_FW)/,$(PI_FW_FILES)) $(PI)/sdcard/nimbus8.img $(PI)/sdcard/config.txt \
+	  $(PI)/sdcard/NIMBUS.LOG $(PI)/sdcard/README-NIMBUS.txt ::
+	@echo "SD card image: $@ (write it with Raspberry Pi Imager, Use custom)"
+pi-img: $(PI_IMG)
 pi: $(PI_KIMG)
 test-pi:
 	python3 tools/test_pi.py
